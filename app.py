@@ -691,87 +691,30 @@ def extract_data_from_document(
     )
 
 
+HEADER_KEYWORDS = (
+    "mã phụ", "gcn số", "gcn s", "phương pháp", "mã ql", "mã id",
+    "phạm vi", "điểm hiệu chuẩn", "điểm hc", "dlvn", "giá trị đọc",
+    "chuẩn p", "chuẩn ma", "hệ số", "tương ứng", "min", "max", "đơn vị", "đ.vị",
+    "hệ số chuyển đổi", "giá trị p", "giá trị tương ứng"
+)
 
 
+def _find_header_end_row(ws, max_scan: int = 15) -> int:
+    """Find the bottom-most row index that belongs to the header block."""
+    last_header = 0
+    for r in range(1, min(max_scan, ws.max_row + 1)):
+        row_has_header_kw = False
+        for c in range(1, min(25, ws.max_column + 1)):
+            v = ws.cell(row=r, column=c).value
+            if v is not None:
+                v_lower = str(v).strip().lower()
+                if any(kw in v_lower for kw in HEADER_KEYWORDS):
+                    row_has_header_kw = True
+                    break
+        if row_has_header_kw:
+            last_header = r
+    return last_header if last_header > 0 else 6
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CORE FUNCTION 2: EXCEL APPEND
-# ─────────────────────────────────────────────────────────────────────────────
-
-def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
-    """
-    Append the extracted calibration data to the two sheets of the Excel
-    template and return the modified workbook as bytes.
-
-    Parameters
-    ----------
-    excel_path     : str or Path
-        Path to the existing Excel template file.
-    extracted_data : dict
-        Validated extraction dict (matching the AI JSON schema).
-
-    Returns
-    -------
-    bytes
-        The in-memory workbook bytes ready for download.
-
-    Raises
-    ------
-    ValueError
-        When required sheets are not found.
-    """
-    wb = load_workbook(excel_path)
-
-    # ── Resolve sheet references (by index or name) ────────────────────────
-    if len(wb.sheetnames) < 1:
-        raise ValueError("Excel template has no sheets.")
-
-    ws1 = wb.worksheets[0]   # Sheet 1 — DANH MỤC HIỆU CHUẨN
-    ws2 = wb.worksheets[1] if len(wb.worksheets) > 1 else wb.create_sheet("Sheet2")
-
-    # ── Unpack data ─────────────────────────────────────────────────────────
-    gcn_so          = extracted_data.get("gcn_so", "")
-    ma_id           = extracted_data.get("ma_id", "")
-    ten_uut         = extracted_data.get("ten_uut", "")
-    khach_hang      = extracted_data.get("khach_hang", "")
-    nguoi_thuc_hien = extracted_data.get("nguoi_thuc_hien", "")
-    ngay_hc         = extracted_data.get("ngay_hc", "")
-    ket_qua         = extracted_data.get("ket_qua", "OK")
-    tem_hc          = extracted_data.get("tem_hc", "")
-    ngay_ke_tiep    = extracted_data.get("ngay_ke_tiep", "")
-    tb_chuan_1      = extracted_data.get("tb_chuan_1", "")
-    don_vi          = extracted_data.get("don_vi", "")
-    range_min       = extracted_data.get("range_min", None)
-    range_max       = extracted_data.get("range_max", None)
-    points          = extracted_data.get("points", [])
-
-    # ────────────────────────────────────────────────────────────────────────
-    # SHEET 1 — append a single row
-    # ────────────────────────────────────────────────────────────────────────
-    next_row_s1 = ws1.max_row + 1
-
-    # Try to copy style from last data row (if it exists & is not header)
-    if ws1.max_row >= 2:
-        _copy_row_style(ws1, ws1.max_row, next_row_s1)
-
-    row_s1 = [
-        gcn_so,           # Col 1
-        ma_id,            # Col 2
-        ma_id,            # Col 3 — Mã số nhận dạng (same as Mã ID)
-        ten_uut,          # Col 4
-        khach_hang,       # Col 5
-        "",               # Col 6 — Phiếu YCCV (empty)
-        nguoi_thuc_hien,  # Col 7
-        "DLVN76",         # Col 8 — P.pháp HC (hardcoded default)
-        ngay_hc,          # Col 9
-        ket_qua,          # Col 10
-        tem_hc,           # Col 11
-        ngay_ke_tiep,     # Col 12
-        tb_chuan_1,       # Col 13
-    ]
-
-    for col_idx, value in enumerate(row_s1, start=1):
-        ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
 def _unmerge_row(ws, row_idx: int):
     """Remove any merged cell ranges that intersect row_idx to prevent data overlap."""
@@ -783,22 +726,25 @@ def _unmerge_row(ws, row_idx: int):
         ws.unmerge_cells(range_string=str(rng))
 
 
-def _get_last_data_row(ws, header_offset: int = 6) -> int:
-    """Find the highest row index that contains actual calibration data in Col 1 or Col 2."""
-    if ws.max_row < 1:
-        return 0
-    for r in range(ws.max_row, 0, -1):
+def _get_last_data_row(ws) -> tuple[int, int]:
+    """
+    Returns (header_end_row, last_data_row).
+    If no data rows exist yet below header_end_row, last_data_row == header_end_row.
+    """
+    header_end = _find_header_end_row(ws)
+    last_data = header_end
+
+    for r in range(ws.max_row, header_end, -1):
         v1 = ws.cell(row=r, column=1).value
         v2 = ws.cell(row=r, column=2).value
-        if v1 is not None and str(v1).strip() != "":
-            val_str = str(v1).strip()
-            if val_str not in ("Mã Phụ", "Mã Phụ (Tự động)", "GCN Số", "GCN Số", "1", "2"):
-                return r
-        if v2 is not None and str(v2).strip() != "":
-            val_str = str(v2).strip()
-            if val_str not in ("Mã Phụ", "Mã Phụ (Tự động)", "GCN Số", "GCN Số", "1", "2"):
-                return r
-    return header_offset
+        if (v1 is not None and str(v1).strip() != "") or (v2 is not None and str(v2).strip() != ""):
+            v1_str = str(v1 or "").strip().lower()
+            v2_str = str(v2 or "").strip().lower()
+            if not any(kw in v1_str or kw in v2_str for kw in HEADER_KEYWORDS):
+                last_data = r
+                break
+
+    return header_end, last_data
 
 
 def _format_sheet2_row(ws, row_idx: int, is_first_point: bool):
@@ -900,9 +846,11 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 1 — append a single row
     # ────────────────────────────────────────────────────────────────────────
-    last_row_s1 = _get_last_data_row(ws1, header_offset=1)
-    next_row_s1 = max(2, last_row_s1 + 1)
+    header_end_s1, last_data_s1 = _get_last_data_row(ws1)
+    next_row_s1 = max(2, last_data_s1 + 1)
     _unmerge_row(ws1, next_row_s1)
+    for c in range(1, 26):
+        ws1.cell(row=next_row_s1, column=c).value = None
 
     if ws1.max_row >= 2:
         _copy_row_style(ws1, 2, next_row_s1)
@@ -919,13 +867,17 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 2 — append measurement point rows
     # ────────────────────────────────────────────────────────────────────────
-    last_row_s2 = _get_last_data_row(ws2, header_offset=6)
-    if last_row_s2 > 6:
-        last_row_s2 += 1  # 1 blank separator row
+    header_end_s2, last_data_s2 = _get_last_data_row(ws2)
+    if last_data_s2 > header_end_s2:
+        start_row_s2 = last_data_s2 + 2
+    else:
+        start_row_s2 = header_end_s2 + 1
 
     for i, pt in enumerate(points):
-        dest_row = last_row_s2 + 1 + i
+        dest_row = start_row_s2 + i
         _unmerge_row(ws2, dest_row)
+        for c in range(1, 26):
+            ws2.cell(row=dest_row, column=c).value = None
 
         point_id = pt.get("point_id", f"D{i+1}")
         p_value  = _safe_float(pt.get("p_value"))
