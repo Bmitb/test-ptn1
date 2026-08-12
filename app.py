@@ -604,7 +604,132 @@ def split_pdf_pages(file_bytes: bytes) -> list[bytes]:
             f"Không thể render PDF. Cài PyMuPDF: `pip install pymupdf`. Lỗi: {e}"
         )
 
-def _get_last_data_row(ws, header_offset: int = 6) -> tuple[int, int]:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE FUNCTION 1: CALL GEMINI API FOR DATA EXTRACTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def extract_data_from_document(
+    file_bytes: bytes | None = None,
+    mime_type: str = "application/pdf",
+    api_key: str = "",
+    model_name: str = "gemini-2.5-flash",
+    image_bytes: bytes | None = None,
+) -> dict:
+    """
+    Send a calibration document or single page image to Google Gemini and return
+    the extracted data as a Python dict.
+    Accepts either `file_bytes` or `image_bytes`.
+    """
+    from google import genai
+    from google.genai import types as genai_types
+
+    raw_bytes = image_bytes if image_bytes is not None else file_bytes
+    if not raw_bytes:
+        raise ValueError("Chưa cung cấp dữ liệu file hoặc hình ảnh.")
+
+    client = genai.Client(api_key=api_key)
+
+    # ── Render PDF / Image → list of Part ──────────────────────────────────
+    image_parts: list[genai_types.Part] = []
+
+    if mime_type == "application/pdf":
+        try:
+            pages_png = split_pdf_pages(raw_bytes)
+            for page_bytes in pages_png[:5]:
+                image_parts.append(
+                    genai_types.Part.from_bytes(data=page_bytes, mime_type="image/png")
+                )
+        except Exception as e:
+            raise ValueError(f"Không thể phân tách trang PDF: {e}")
+        if not image_parts:
+            raise ValueError("Không trích xuất được trang nào từ PDF.")
+    else:
+        # Image file or pre-rendered PDF page (png/jpg/jpeg)
+        effective_mime = "image/png" if mime_type.startswith("application/pdf") else mime_type
+        image_parts.append(
+            genai_types.Part.from_bytes(data=raw_bytes, mime_type=effective_mime)
+        )
+
+    # ── Call Gemini API with automatic retry & fallback ───────────────────
+    contents = [EXTRACTION_PROMPT] + image_parts
+    config = genai_types.GenerateContentConfig(
+        temperature=0.0,
+        max_output_tokens=4096,
+    )
+
+    # Candidate models to attempt if the primary one is rate limited / overloaded
+    fallback_models = [model_name] + [
+        m for m in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro", "gemini-flash-latest"]
+        if m != model_name
+    ]
+
+    last_err = None
+    for attempt_model in fallback_models:
+        for attempt in range(4):  # 4 retries per model
+            try:
+                response = client.models.generate_content(
+                    model=attempt_model,
+                    contents=contents,
+                    config=config,
+                )
+                result_text = response.text
+                return _parse_json_response(result_text)
+            except Exception as e:
+                err_str = str(e)
+                last_err = e
+                # Check for 429 (rate limit / resource exhausted) vs 503 (server overloaded)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s, 20s backoff for 429 Rate Limits
+                    time.sleep(wait_time)
+                    continue
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    wait_time = (attempt + 1) * 3  # 3s, 6s, 9s backoff for 503
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Non-retryable error on this model -> try next fallback model
+                    break
+
+    raise ValueError(
+        f"Gemini API error (đã tự động thử lại nhiều lần nhưng bị giới hạn tần suất 429/503): {last_err}\n"
+        f"💡 Gợi ý: Google API Key miễn phí bị giới hạn lượt gọi/phút. Vui lòng chờ 30s-1 phút rồi bấm Trích xuất lại."
+    )
+
+
+HEADER_KEYWORDS = (
+    "mã phụ", "gcn số", "gcn s", "phương pháp", "mã ql", "mã id",
+    "phạm vi", "điểm hiệu chuẩn", "điểm hc", "dlvn", "giá trị đọc",
+    "chuẩn p", "chuẩn ma", "hệ số", "tương ứng", "min", "max", "đơn vị", "đ.vị",
+    "hệ số chuyển đổi", "giá trị p", "giá trị tương ứng"
+)
+
+
+def _find_header_end_row(ws, max_scan: int = 15) -> int:
+    """Find the bottom-most row index that belongs to the header block."""
+    last_header = 0
+    for r in range(1, min(max_scan, ws.max_row + 1)):
+        row_has_header_kw = False
+        for c in range(1, min(25, ws.max_column + 1)):
+            v = ws.cell(row=r, column=c).value
+            if v is not None:
+                v_lower = str(v).strip().lower()
+                if any(kw in v_lower for kw in HEADER_KEYWORDS):
+                    row_has_header_kw = True
+                    break
+        if row_has_header_kw:
+            last_header = r
+    return last_header if last_header > 0 else 6
+
+
+def _unmerge_row(ws, row_idx: int):
+    """Remove any merged cell ranges that intersect row_idx to prevent data overlap."""
+    to_remove = []
+    for rng in list(ws.merged_cells.ranges):
+        if rng.min_row <= row_idx <= rng.max_row:
+            to_remove.append(rng)
+    for rng in to_remove:
+        ws.unmerge_cells(range_string=str(rng))
     """
     Returns (header_end_row, last_data_row).
     If no data rows exist yet below header_end_row, last_data_row == header_end_row.
