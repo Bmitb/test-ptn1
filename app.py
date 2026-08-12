@@ -557,55 +557,45 @@ def split_pdf_pages(file_bytes: bytes) -> list[bytes]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def extract_data_from_document(
-    file_bytes: bytes,
-    mime_type: str,
-    api_key: str,
+    file_bytes: bytes | None = None,
+    mime_type: str = "application/pdf",
+    api_key: str = "",
     model_name: str = "gemini-2.5-flash",
+    image_bytes: bytes | None = None,
 ) -> dict:
     """
-    Send a calibration document (PDF or image) to Google Gemini and return
+    Send a calibration document or single page image to Google Gemini and return
     the extracted data as a Python dict.
-    Uses the new `google-genai` SDK (replaces deprecated google-generativeai).
+    Accepts either `file_bytes` or `image_bytes`.
     """
     from google import genai
     from google.genai import types as genai_types
 
+    raw_bytes = image_bytes if image_bytes is not None else file_bytes
+    if not raw_bytes:
+        raise ValueError("Chưa cung cấp dữ liệu file hoặc hình ảnh.")
+
     client = genai.Client(api_key=api_key)
 
-    # ── Render PDF → list of PNG bytes ────────────────────────────────────
+    # ── Render PDF / Image → list of Part ──────────────────────────────────
     image_parts: list[genai_types.Part] = []
 
     if mime_type == "application/pdf":
         try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            for page_num in range(min(len(doc), 5)):
-                page = doc.load_page(page_num)
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-                img_bytes = pix.tobytes("png")
+            pages_png = split_pdf_pages(raw_bytes)
+            for page_bytes in pages_png[:5]:
                 image_parts.append(
-                    genai_types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+                    genai_types.Part.from_bytes(data=page_bytes, mime_type="image/png")
                 )
-        except ImportError:
-            try:
-                from pdf2image import convert_from_bytes
-                pages = convert_from_bytes(file_bytes, dpi=200)
-                for page in pages[:5]:
-                    buf = io.BytesIO()
-                    page.save(buf, format="PNG")
-                    image_parts.append(
-                        genai_types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png")
-                    )
-            except Exception as e:
-                raise ValueError(
-                    f"Không thể render PDF. Cài PyMuPDF: `pip install pymupdf`. Lỗi: {e}"
-                )
+        except Exception as e:
+            raise ValueError(f"Không thể phân tách trang PDF: {e}")
         if not image_parts:
             raise ValueError("Không trích xuất được trang nào từ PDF.")
     else:
-        # Image file (png/jpg/jpeg)
+        # Image file or pre-rendered PDF page (png/jpg/jpeg)
+        effective_mime = "image/png" if mime_type.startswith("application/pdf") else mime_type
         image_parts.append(
-            genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+            genai_types.Part.from_bytes(data=raw_bytes, mime_type=effective_mime)
         )
 
     # ── Call Gemini API with automatic retry & fallback ───────────────────
