@@ -1,6 +1,6 @@
 # 🔬 Pressure Calibration Report Parser AI — Batch & Multi-page PDF Edition
 
-Ứng dụng Full-Stack Python xử lý **hàng loạt** biên bản hiệu chuẩn áp suất chữ viết tay bằng **Google Gemini Vision AI** và tự động ghi/append **toàn bộ dữ liệu** vào file **Excel template 2 sheet** chỉ với **1 Click**, sử dụng `openpyxl`.
+Ứng dụng Full-Stack Python xử lý **hàng loạt** biên bản hiệu chuẩn áp suất chữ viết tay bằng **Google Gemini Vision AI** và tự động ghi/append **toàn bộ dữ liệu** vào file **Excel template 2 sheet** (VILAS 415) chỉ với **1 Click**, sử dụng `openpyxl`.
 
 ---
 
@@ -10,7 +10,7 @@
 * **🚀 Batch Upload & Processing (MỚI v2.0):** Upload **nhiều file PDF/ảnh cùng lúc**, hệ thống tự động xử lý lần lượt từng file/trang với **thanh tiến trình** (`st.progress`) hiển thị trạng thái theo từng file/trang theo thời gian thực.
 * **📋 Bảng tổng hợp thống nhất (MỚI v2.0):** Sau khi trích xuất, **tất cả dữ liệu** của các thiết bị được gộp vào **1 bảng Sheet 1** (mỗi hàng = 1 thiết bị) và **1 bảng Sheet 2** (tất cả điểm đo), có thể chỉnh sửa trực tiếp trước khi lưu.
 * **💾 Ghi liên tiếp 1-Click (MỚI v2.0):** Nút "💾 Lưu tất cả vào Excel" ghi **toàn bộ N thiết bị** vào Sheet 1 (N hàng) và Sheet 2 (N × điểm đo, cách nhau 1 dòng trống) chỉ với 1 thao tác.
-* **🎯 Căn lề & Định dạng chuẩn (MỚI v2.1):** Khắc phục triệt để lỗi căn lề và lệch định dạng trên Sheet 2 cho các thiết bị phía sau bằng cơ chế ánh chiếu dòng mẫu định dạng gốc (Master Template Row).
+* **🎯 Căn lề & Định dạng chuẩn VILAS 415 (MỚI v2.2):** Khắc phục triệt để lỗi lệch cột và lệch định dạng màu trên Sheet 2 bằng cách bổ sung cột **Phương pháp HC** (Col 3), căn chỉnh đúng 13 cột và kế thừa dòng mẫu định dạng gốc (Rows 7 & 8).
 * **🤖 Đọc chữ viết tay tiếng Việt xuất sắc:** Sử dụng **Google Gemini AI** (hỗ trợ `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-pro`,...) để nhận diện hình ảnh/PDF phiếu hiệu chuẩn áp suất viết tay hoặc in.
 * **🛡️ Cơ chế Kháng lỗi 503 & Rate Limit:** Tự động thử lại (Exponential Backoff) và tự chuyển sang model dự phòng (Model Fallback) khi máy chủ Google quá tải. Các file lỗi được ghi log riêng, không dừng toàn bộ batch.
 * **🔍 Tự động quét Model khả dụng:** Tích hợp tính năng quét toàn bộ model active từ Google API Key của người dùng.
@@ -31,9 +31,9 @@
 
 ---
 
-## 📋 Cấu trúc Mapping Dữ liệu Excel (2 Sheets)
+## 📋 Cấu trúc Mapping Dữ liệu Excel (2 Sheets - Chuẩn VILAS 415)
 
-Ứng dụng trích xuất và ánh ánh tự động vào 2 Sheet của file template Excel:
+Ứng dụng trích xuất và ánh xạ tự động vào 2 Sheet của file template Excel:
 
 ### 1️⃣ Sheet 1: Danh mục & Thông tin chung (1 dòng / phiếu)
 
@@ -55,20 +55,21 @@
 
 ### 2️⃣ Sheet 2: Chi tiết các điểm đo (N dòng / phiếu — D1 đến Dn)
 
-| Tên Cột Excel | Trường dữ liệu trích xuất | Ví dụ / Mô tả |
-| :--- | :--- | :--- |
-| **Mã Phụ** | `{gcn_so}{point_id}` | `240815/TB-12D1` |
-| **GCN Số** | `gcn_so` | `240815/TB-12` |
-| **Mã QL / Mã ID** | `ma_id` | `PI-204` |
-| **Đ.vị** | `don_vi` | `bar` / `MPa` |
-| **Min** | `range_min` | `0` (chỉ điền ở dòng D1) |
-| **Max** | `range_max` | `100` (chỉ điền ở dòng D1) |
-| **Điểm HC** | `point_id` | `D1`, `D2`, `D3`,... |
-| **Đơn vị P** | `don_vi` | `bar` |
-| **P** | `p_value` | Giá trị áp suất đặt (vd: `0`, `25`, `50`, `75`, `100`) |
-| **Đơn vị Chuẩn P** | `don_vi` | `bar` |
-| **P c.tăng** | `p_tang` | Số đọc chiều tăng của chuẩn |
-| **P c.giảm** | `p_giam` | Số đọc chiều giảm của chuẩn |
+| Col # | Tên Cột Excel | Trường dữ liệu trích xuất | Ví dụ / Mô tả |
+| :---: | :--- | :--- | :--- |
+| **1** | **Mã Phụ (Tự động)** | `{gcn_so}{point_id}` | `MCLAB26CN-1.0005D1` |
+| **2** | **GCN Số** | `gcn_so` | `MCLAB26CN-1.0005` |
+| **3** | **Phương pháp HC** | `phuong_phap_hc` | `DLVN76` |
+| **4** | **Mã QL/ Mã ID (Tự động)** | `ma_id` | `MC-05-6-646` |
+| **5** | **Đ.vị** | `don_vi` | `bar` |
+| **6** | **Min** | `range_min` | `0` (chỉ điền ở dòng D1) |
+| **7** | **Max** | `range_max` | `700` (chỉ điền ở dòng D1) |
+| **8** | **Điểm hiệu chuẩn** | `point_id` | `D1`, `D2`, `D3`,... |
+| **9** | **Đơn vị P** | `don_vi` | `bar` |
+| **10** | **P** | `p_value` | Giá trị áp suất đặt (vd: `0`, `100`, `200`) |
+| **11** | **Đơn vị Chuẩn P** | `don_vi` | `bar` |
+| **12** | **P c.tăng** | `p_tang` | Số đọc chiều tăng của chuẩn (vd: `102.3`) |
+| **13** | **P c.giảm** | `p_giam` | Số đọc chiều giảm của chuẩn (vd: `99.5`) |
 
 ---
 
@@ -121,6 +122,6 @@ Truy cập giao diện Web tại địa chỉ: `http://localhost:8501`
 ---
 
 ## 📄 Giấy phép & Tác giả
-* **Được phát triển bửi:** Senior Full-Stack Developer
-* **Phiên bản:** `2.0.0` — Batch Edition
+* **Được phát triển bởi:** Senior Full-Stack Developer
+* **Phiên bản:** `2.2.0` — VILAS 415 Excel Format Edition
 * **Tháng:** 08/2026

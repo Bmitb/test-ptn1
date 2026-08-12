@@ -453,7 +453,7 @@ SHEET1_HEADERS = [
 ]
 
 SHEET2_HEADERS = [
-    "Mã Phụ", "GCN Số", "Mã QL / Mã ID", "Đ.vị",
+    "Mã Phụ", "GCN Số", "Phương pháp HC", "Mã QL / Mã ID", "Đ.vị",
     "Min", "Max", "Điểm HC", "Đơn vị P", "P",
     "Đơn vị Chuẩn P", "P c.tăng", "P c.giảm",
 ]
@@ -774,12 +774,21 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
         ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
 def _get_style_source_row(ws, is_first_point: bool) -> int | None:
-    """Return template master style source row (2 for D1, 3 for D2+ if available)."""
-    if ws.max_row < 2:
-        return None
-    if is_first_point:
-        return 2
-    return 3 if ws.max_row >= 3 else 2
+    """
+    Return template master data style source row for Sheet 2.
+    In the standard VILAS 415 template:
+    - Row 7 is the master row for D1 (first point of device block).
+    - Row 8 is the master row for D2+ (subsequent points).
+    If template has existing data (max_row >= 7), copy style from row 7 for D1, row 8 for D2+.
+    Otherwise, if max_row >= 2, fall back to max_row.
+    """
+    if ws.max_row >= 7:
+        if is_first_point:
+            return 7
+        return 8 if ws.max_row >= 8 else 7
+    elif ws.max_row >= 2:
+        return ws.max_row
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -828,6 +837,7 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     tem_hc          = extracted_data.get("tem_hc", "")
     ngay_ke_tiep    = extracted_data.get("ngay_ke_tiep", "")
     tb_chuan_1      = extracted_data.get("tb_chuan_1", "")
+    phuong_phap_hc  = extracted_data.get("phuong_phap_hc", "DLVN76")
     don_vi          = extracted_data.get("don_vi", "")
     range_min       = extracted_data.get("range_min", None)
     range_max       = extracted_data.get("range_max", None)
@@ -883,23 +893,24 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
         p_tang   = _safe_float(pt.get("p_tang"))
         p_giam   = _safe_float(pt.get("p_giam"))
 
-        # Col 5/6 — Min/Max: only on first row of each device block
+        # Col 6/7 — Min/Max: only on first row of each device block (cols 6 & 7)
         min_val = range_min if i == 0 else None
         max_val = range_max if i == 0 else None
 
         row_s2 = [
-            f"{gcn_so}{point_id}",  # Col 1  — Mã Phụ
+            f"{gcn_so}{point_id}",  # Col 1  — Mã Phụ (Tự động)
             gcn_so,                  # Col 2  — GCN Số
-            ma_id,                   # Col 3  — Mã QL / Mã ID
-            don_vi,                  # Col 4  — Đ.vị
-            min_val,                 # Col 5  — Min
-            max_val,                 # Col 6  — Max
-            point_id,                # Col 7  — Điểm HC
-            don_vi,                  # Col 8  — Đơn vị P
-            p_value,                 # Col 9  — P
-            don_vi,                  # Col 10 — Đơn vị Chuẩn P
-            p_tang,                  # Col 11 — P c.tăng
-            p_giam,                  # Col 12 — P c.giảm
+            phuong_phap_hc,          # Col 3  — Phương pháp HC (DLVN 76/ DLVN 112/ DLVN 133)
+            ma_id,                   # Col 4  — Mã QL / Mã ID (Tự động)
+            don_vi,                  # Col 5  — Đ.vị (Phạm vi hiệu chuẩn)
+            min_val,                 # Col 6  — Min
+            max_val,                 # Col 7  — Max
+            point_id,                # Col 8  — Điểm hiệu chuẩn
+            don_vi,                  # Col 9  — Đơn vị P (Giá trị đọc UUT)
+            p_value,                 # Col 10 — P
+            don_vi,                  # Col 11 — Đơn vị Chuẩn P
+            p_tang,                  # Col 12 — P c.tăng
+            p_giam,                  # Col 13 — P c.giảm
         ]
 
         for col_idx, value in enumerate(row_s2, start=1):
@@ -955,6 +966,7 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         tem_hc          = extracted_data.get("tem_hc", "")
         ngay_ke_tiep    = extracted_data.get("ngay_ke_tiep", "")
         tb_chuan_1      = extracted_data.get("tb_chuan_1", "")
+        phuong_phap_hc  = extracted_data.get("phuong_phap_hc", "DLVN76")
         don_vi          = extracted_data.get("don_vi", "")
         range_min       = extracted_data.get("range_min", None)
         range_max       = extracted_data.get("range_max", None)
@@ -992,7 +1004,7 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
             max_val  = range_max if i == 0 else None
 
             row_s2 = [
-                f"{gcn_so}{point_id}", gcn_so, ma_id, don_vi,
+                f"{gcn_so}{point_id}", gcn_so, phuong_phap_hc, ma_id, don_vi,
                 min_val, max_val, point_id, don_vi, p_value,
                 don_vi, p_tang, p_giam,
             ]
@@ -1029,12 +1041,13 @@ def _build_sheet1_df(data: dict) -> pd.DataFrame:
 
 
 def _build_sheet2_df(data: dict) -> pd.DataFrame:
-    gcn_so    = data.get("gcn_so", "")
-    ma_id     = data.get("ma_id", "")
-    don_vi    = data.get("don_vi", "")
-    range_min = data.get("range_min")
-    range_max = data.get("range_max")
-    points    = data.get("points", [])
+    gcn_so          = data.get("gcn_so", "")
+    ma_id           = data.get("ma_id", "")
+    phuong_phap_hc  = data.get("phuong_phap_hc", "DLVN76")
+    don_vi          = data.get("don_vi", "")
+    range_min       = data.get("range_min")
+    range_max       = data.get("range_max")
+    points          = data.get("points", [])
 
     rows = []
     for i, pt in enumerate(points):
@@ -1042,6 +1055,7 @@ def _build_sheet2_df(data: dict) -> pd.DataFrame:
         rows.append({
             "Mã Phụ":         f"{gcn_so}{point_id}",
             "GCN Số":         gcn_so,
+            "Phương pháp HC": phuong_phap_hc,
             "Mã QL / Mã ID":  ma_id,
             "Đ.vị":           don_vi,
             "Min":            range_min if i == 0 else "",
@@ -1089,6 +1103,8 @@ def _apply_sheet1_edits(df: pd.DataFrame, data: dict) -> dict:
 def _apply_sheet2_edits(df: pd.DataFrame, data: dict) -> dict:
     if df.empty:
         return data
+    if "Phương pháp HC" in df.columns and not df["Phương pháp HC"].empty:
+        data["phuong_phap_hc"] = str(df.iloc[0].get("Phương pháp HC", "DLVN76"))
     if not df.empty and "Đ.vị" in df.columns and not df["Đ.vị"].empty:
         data["don_vi"] = str(df.iloc[0].get("Đ.vị", data.get("don_vi", "")))
     first_row = df[df["Min"].astype(str).str.strip() != ""]
@@ -1116,7 +1132,7 @@ def _apply_batch_edits(
     """
     Merge user edits from the unified data editors back into the batch_results
     list.  Sheet-1 rows are matched positionally; Sheet-2 rows are grouped by
-    GCN S\u1ed1 and matched to the corresponding batch entry.
+    GCN Số and matched to the corresponding batch entry.
     """
     updated: list[dict] = []
     for i, data in enumerate(batch_results):
@@ -1125,23 +1141,25 @@ def _apply_batch_edits(
         # ── apply Sheet-1 edits (positional) ─────────────────────────────
         if not edited_s1.empty and i < len(edited_s1):
             row = edited_s1.iloc[i]
-            d["gcn_so"]          = str(row.get("GCN S\u1ed1", d.get("gcn_so", "")))
-            d["ma_id"]           = str(row.get("M\u00e3 ID", d.get("ma_id", "")))
-            d["ten_uut"]         = str(row.get("T\u00ean UUT", d.get("ten_uut", "")))
-            d["khach_hang"]      = str(row.get("Kh\u00e1ch h\u00e0ng", d.get("khach_hang", "")))
-            d["nguoi_thuc_hien"] = str(row.get("Ng\u01b0\u1eddi th\u1ef1c hi\u1ec7n", d.get("nguoi_thuc_hien", "")))
-            d["ngay_hc"]         = str(row.get("Ng\u00e0y hi\u1ec7u chu\u1ea9n", d.get("ngay_hc", "")))
-            d["ket_qua"]         = str(row.get("K\u1ebft qu\u1ea3 HC", d.get("ket_qua", "OK")))
-            d["tem_hc"]          = str(row.get("Tem hi\u1ec7u chu\u1ea9n", d.get("tem_hc", "")))
-            d["ngay_ke_tiep"]    = str(row.get("Ng\u00e0y HC k\u1ebf ti\u1ebfp", d.get("ngay_ke_tiep", "")))
-            d["tb_chuan_1"]      = str(row.get("TB Chu\u1ea9n 1", d.get("tb_chuan_1", "")))
+            d["gcn_so"]          = str(row.get("GCN Số", d.get("gcn_so", "")))
+            d["ma_id"]           = str(row.get("Mã ID", d.get("ma_id", "")))
+            d["ten_uut"]         = str(row.get("Tên UUT", d.get("ten_uut", "")))
+            d["khach_hang"]      = str(row.get("Khách hàng", d.get("khach_hang", "")))
+            d["nguoi_thuc_hien"] = str(row.get("Người thực hiện", d.get("nguoi_thuc_hien", "")))
+            d["ngay_hc"]         = str(row.get("Ngày hiệu chuẩn", d.get("ngay_hc", "")))
+            d["ket_qua"]         = str(row.get("Kết quả HC", d.get("ket_qua", "OK")))
+            d["tem_hc"]          = str(row.get("Tem hiệu chuẩn", d.get("tem_hc", "")))
+            d["ngay_ke_tiep"]    = str(row.get("Ngày HC kế tiếp", d.get("ngay_ke_tiep", "")))
+            d["tb_chuan_1"]      = str(row.get("TB Chuẩn 1", d.get("tb_chuan_1", "")))
 
-        # ── apply Sheet-2 edits (group by GCN S\u1ed1) ────────────────────────────
+        # ── apply Sheet-2 edits (group by GCN Số) ────────────────────────────
         gcn = d.get("gcn_so", "")
-        if gcn and not edited_s2.empty and "GCN S\u1ed1" in edited_s2.columns:
-            device_rows = edited_s2[edited_s2["GCN S\u1ed1"].astype(str) == gcn]
+        if gcn and not edited_s2.empty and "GCN Số" in edited_s2.columns:
+            device_rows = edited_s2[edited_s2["GCN Số"].astype(str) == gcn]
             if not device_rows.empty:
-                d["don_vi"] = str(device_rows.iloc[0].get("\u0110.v\u1ecb", d.get("don_vi", "")))
+                if "Phương pháp HC" in device_rows.columns:
+                    d["phuong_phap_hc"] = str(device_rows.iloc[0].get("Phương pháp HC", d.get("phuong_phap_hc", "DLVN76")))
+                d["don_vi"] = str(device_rows.iloc[0].get("Đ.vị", d.get("don_vi", "")))
                 first_min = device_rows[
                     device_rows["Min"].astype(str).str.strip().replace("nan", "") != ""
                 ]
@@ -1151,10 +1169,10 @@ def _apply_batch_edits(
                 points: list[dict] = []
                 for _, pt_row in device_rows.iterrows():
                     points.append({
-                        "point_id": str(pt_row.get("\u0110i\u1ec3m HC", "")),
+                        "point_id": str(pt_row.get("Điểm HC", "")),
                         "p_value":  _safe_float(pt_row.get("P")),
-                        "p_tang":   _safe_float(pt_row.get("P c.t\u0103ng")),
-                        "p_giam":   _safe_float(pt_row.get("P c.gi\u1ea3m")),
+                        "p_tang":   _safe_float(pt_row.get("P c.tăng")),
+                        "p_giam":   _safe_float(pt_row.get("P c.giảm")),
                     })
                 d["points"] = points
 
@@ -1722,7 +1740,8 @@ def main():
             column_config={
                 "Mã Phụ":          st.column_config.TextColumn("Mã Phụ", width="large"),
                 "GCN Số":          st.column_config.TextColumn("GCN Số", width="medium"),
-                "Mã QL / Mã ID":   st.column_config.TextColumn("Mã QL", width="medium"),
+                "Phương pháp HC": st.column_config.TextColumn("P.pháp HC", width="small"),
+                "Mã QL / Mã ID":   st.column_config.TextColumn("Mã QL / Mã ID", width="medium"),
                 "Đ.vị":            st.column_config.TextColumn("Đ.vị", width="small"),
                 "Min":             st.column_config.NumberColumn("Min", format="%.2f"),
                 "Max":             st.column_config.NumberColumn("Max", format="%.2f"),
