@@ -773,22 +773,77 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     for col_idx, value in enumerate(row_s1, start=1):
         ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
-def _get_style_source_row(ws, is_first_point: bool) -> int | None:
+def _unmerge_row(ws, row_idx: int):
+    """Remove any merged cell ranges that intersect row_idx to prevent data overlap."""
+    to_remove = []
+    for rng in list(ws.merged_cells.ranges):
+        if rng.min_row <= row_idx <= rng.max_row:
+            to_remove.append(rng)
+    for rng in to_remove:
+        ws.unmerge_cells(range_string=str(rng))
+
+
+def _get_last_data_row(ws, header_offset: int = 6) -> int:
+    """Find the highest row index that contains actual calibration data in Col 1 or Col 2."""
+    if ws.max_row < 1:
+        return 0
+    for r in range(ws.max_row, 0, -1):
+        v1 = ws.cell(row=r, column=1).value
+        v2 = ws.cell(row=r, column=2).value
+        if v1 is not None and str(v1).strip() != "":
+            val_str = str(v1).strip()
+            if val_str not in ("Mã Phụ", "Mã Phụ (Tự động)", "GCN Số", "GCN Số", "1", "2"):
+                return r
+        if v2 is not None and str(v2).strip() != "":
+            val_str = str(v2).strip()
+            if val_str not in ("Mã Phụ", "Mã Phụ (Tự động)", "GCN Số", "GCN Số", "1", "2"):
+                return r
+    return header_offset
+
+
+def _format_sheet2_row(ws, row_idx: int, is_first_point: bool):
     """
-    Return template master data style source row for Sheet 2.
-    In the standard VILAS 415 template:
-    - Row 7 is the master row for D1 (first point of device block).
-    - Row 8 is the master row for D2+ (subsequent points).
-    If template has existing data (max_row >= 7), copy style from row 7 for D1, row 8 for D2+.
-    Otherwise, if max_row >= 2, fall back to max_row.
+    Apply clean uniform formatting matching VILAS 415 template Image 1 (Bản gốc).
+    - Thin light gray borders for all 13 cells
+    - Correct horizontal alignment per column
+    - Regular clean font (not bold, black text)
     """
+    thin_side = Side(border_style="thin", color="BFBFBF")
+    clean_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    base_font = Font(name="Arial", size=10, bold=False, color="000000")
     if ws.max_row >= 7:
-        if is_first_point:
-            return 7
-        return 8 if ws.max_row >= 8 else 7
-    elif ws.max_row >= 2:
-        return ws.max_row
-    return None
+        sample_cell = ws.cell(row=7, column=1)
+        if sample_cell.font and sample_cell.font.name:
+            base_font = Font(
+                name=sample_cell.font.name,
+                size=sample_cell.font.size or 10,
+                bold=False,
+                color="000000",
+            )
+
+    alignments = {
+        1:  Alignment(horizontal="center", vertical="center"), # Mã Phụ
+        2:  Alignment(horizontal="left",   vertical="center"), # GCN Số
+        3:  Alignment(horizontal="center", vertical="center"), # Phương pháp HC
+        4:  Alignment(horizontal="center", vertical="center"), # Mã QL / Mã ID
+        5:  Alignment(horizontal="center", vertical="center"), # Đ.vị
+        6:  Alignment(horizontal="right",  vertical="center"), # Min
+        7:  Alignment(horizontal="right",  vertical="center"), # Max
+        8:  Alignment(horizontal="center", vertical="center"), # Điểm HC
+        9:  Alignment(horizontal="center", vertical="center"), # Đơn vị P
+        10: Alignment(horizontal="right",  vertical="center"), # P
+        11: Alignment(horizontal="center", vertical="center"), # Đơn vị Chuẩn P
+        12: Alignment(horizontal="right",  vertical="center"), # P c.tăng
+        13: Alignment(horizontal="right",  vertical="center"), # P c.giảm
+    }
+
+    for col in range(1, 14):
+        cell = ws.cell(row=row_idx, column=col)
+        cell.border = copy(clean_border)
+        cell.font = copy(base_font)
+        cell.alignment = copy(alignments.get(col, Alignment(horizontal="center", vertical="center")))
+        cell.fill = PatternFill(fill_type=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -819,7 +874,6 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     """
     wb = load_workbook(excel_path)
 
-    # ── Resolve sheet references (by index or name) ────────────────────────
     if len(wb.sheetnames) < 1:
         raise ValueError("Excel template has no sheets.")
 
@@ -846,26 +900,17 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 1 — append a single row
     # ────────────────────────────────────────────────────────────────────────
-    next_row_s1 = ws1.max_row + 1
+    last_row_s1 = _get_last_data_row(ws1, header_offset=1)
+    next_row_s1 = max(2, last_row_s1 + 1)
+    _unmerge_row(ws1, next_row_s1)
 
-    # Copy style from master data row 2 if available
     if ws1.max_row >= 2:
         _copy_row_style(ws1, 2, next_row_s1)
 
     row_s1 = [
-        gcn_so,           # Col 1
-        ma_id,            # Col 2
-        ma_id,            # Col 3 — Mã số nhận dạng (same as Mã ID)
-        ten_uut,          # Col 4
-        khach_hang,       # Col 5
-        "",               # Col 6 — Phiếu YCCV (empty)
-        nguoi_thuc_hien,  # Col 7
-        "DLVN76",         # Col 8 — P.pháp HC
-        ngay_hc,          # Col 9
-        ket_qua,          # Col 10
-        tem_hc,           # Col 11
-        ngay_ke_tiep,     # Col 12
-        tb_chuan_1,       # Col 13
+        gcn_so, ma_id, ma_id, ten_uut, khach_hang, "",
+        nguoi_thuc_hien, "DLVN76", ngay_hc, ket_qua,
+        tem_hc, ngay_ke_tiep, tb_chuan_1,
     ]
 
     for col_idx, value in enumerate(row_s1, start=1):
@@ -874,39 +919,32 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 2 — append measurement point rows
     # ────────────────────────────────────────────────────────────────────────
-    last_row_s2 = ws2.max_row
-
-    # Add an empty separator row if the sheet already has data rows
-    has_data_s2 = last_row_s2 >= 2
-    if has_data_s2:
-        last_row_s2 += 1  # blank separator row (leave empty)
+    last_row_s2 = _get_last_data_row(ws2, header_offset=6)
+    if last_row_s2 > 6:
+        last_row_s2 += 1  # 1 blank separator row
 
     for i, pt in enumerate(points):
         dest_row = last_row_s2 + 1 + i
-
-        style_src = _get_style_source_row(ws2, is_first_point=(i == 0))
-        if style_src:
-            _copy_row_style(ws2, style_src, dest_row)
+        _unmerge_row(ws2, dest_row)
 
         point_id = pt.get("point_id", f"D{i+1}")
         p_value  = _safe_float(pt.get("p_value"))
         p_tang   = _safe_float(pt.get("p_tang"))
         p_giam   = _safe_float(pt.get("p_giam"))
 
-        # Col 6/7 — Min/Max: only on first row of each device block (cols 6 & 7)
         min_val = range_min if i == 0 else None
         max_val = range_max if i == 0 else None
 
         row_s2 = [
             f"{gcn_so}{point_id}",  # Col 1  — Mã Phụ (Tự động)
             gcn_so,                  # Col 2  — GCN Số
-            phuong_phap_hc,          # Col 3  — Phương pháp HC (DLVN 76/ DLVN 112/ DLVN 133)
-            ma_id,                   # Col 4  — Mã QL / Mã ID (Tự động)
+            phuong_phap_hc,          # Col 3  — Phương pháp HC
+            ma_id,                   # Col 4  — Mã QL / Mã ID
             don_vi,                  # Col 5  — Đ.vị (Phạm vi hiệu chuẩn)
             min_val,                 # Col 6  — Min
             max_val,                 # Col 7  — Max
             point_id,                # Col 8  — Điểm hiệu chuẩn
-            don_vi,                  # Col 9  — Đơn vị P (Giá trị đọc UUT)
+            don_vi,                  # Col 9  — Đơn vị P
             p_value,                 # Col 10 — P
             don_vi,                  # Col 11 — Đơn vị Chuẩn P
             p_tang,                  # Col 12 — P c.tăng
@@ -915,6 +953,8 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
 
         for col_idx, value in enumerate(row_s2, start=1):
             ws2.cell(row=dest_row, column=col_idx, value=value)
+
+        _format_sheet2_row(ws2, dest_row, is_first_point=(i == 0))
 
     # ── Save to in-memory buffer ─────────────────────────────────────────────
     buf = io.BytesIO()
@@ -931,9 +971,6 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
     """
     Append ALL extracted calibration records (batch) to the two sheets of the
     Excel template and return the modified workbook as bytes.
-
-    Each device occupies exactly 1 row in Sheet 1 and N point-rows + 1 blank
-    separator row in Sheet 2.
 
     Parameters
     ----------
@@ -973,7 +1010,10 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         points          = extracted_data.get("points", [])
 
         # ── Sheet 1: one row per device ───────────────────────────────────
-        next_row_s1 = ws1.max_row + 1
+        last_row_s1 = _get_last_data_row(ws1, header_offset=1)
+        next_row_s1 = max(2, last_row_s1 + 1)
+        _unmerge_row(ws1, next_row_s1)
+
         if ws1.max_row >= 2:
             _copy_row_style(ws1, 2, next_row_s1)
 
@@ -986,15 +1026,13 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
             ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
         # ── Sheet 2: N point rows + 1 blank separator per device ─────────
-        last_row_s2 = ws2.max_row
-        if last_row_s2 >= 2:
-            last_row_s2 += 1  # blank separator row
+        last_row_s2 = _get_last_data_row(ws2, header_offset=6)
+        if last_row_s2 > 6:
+            last_row_s2 += 1  # 1 blank separator row
 
         for i, pt in enumerate(points):
             dest_row = last_row_s2 + 1 + i
-            style_src = _get_style_source_row(ws2, is_first_point=(i == 0))
-            if style_src:
-                _copy_row_style(ws2, style_src, dest_row)
+            _unmerge_row(ws2, dest_row)
 
             point_id = pt.get("point_id", f"D{i+1}")
             p_value  = _safe_float(pt.get("p_value"))
@@ -1010,6 +1048,8 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
             ]
             for col_idx, value in enumerate(row_s2, start=1):
                 ws2.cell(row=dest_row, column=col_idx, value=value)
+
+            _format_sheet2_row(ws2, dest_row, is_first_point=(i == 0))
 
     buf = io.BytesIO()
     wb.save(buf)
