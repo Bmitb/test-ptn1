@@ -730,6 +730,9 @@ def _unmerge_row(ws, row_idx: int):
             to_remove.append(rng)
     for rng in to_remove:
         ws.unmerge_cells(range_string=str(rng))
+
+
+def _get_last_data_row(ws, header_offset: int = 6) -> tuple[int, int]:
     """
     Returns (header_end_row, last_data_row).
     If no data rows exist yet below header_end_row, last_data_row == header_end_row.
