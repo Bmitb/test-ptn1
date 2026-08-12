@@ -705,10 +705,33 @@ HEADER_KEYWORDS = (
 )
 
 
+def _is_data_row(ws, row_idx: int) -> bool:
+    """Check if a row contains actual calibration data (starts with GCN/MCLAB or point code)."""
+    v1 = str(ws.cell(row=row_idx, column=1).value or "").strip()
+    v2 = str(ws.cell(row=row_idx, column=2).value or "").strip()
+    if not v1 and not v2:
+        return False
+
+    v1_lower = v1.lower()
+    v2_lower = v2.lower()
+
+    # Exclude template header text
+    if any(kw in v1_lower or kw in v2_lower for kw in ("mã phụ", "gcn số", "1", "2", "quản tắc", "hiệu chuẩn")):
+        return False
+
+    return len(v1) > 3 or len(v2) > 3
+
+
 def _find_header_end_row(ws, max_scan: int = 15) -> int:
-    """Find the bottom-most row index that belongs to the header block."""
+    """
+    Find the bottom-most row index that belongs to the header block.
+    Stops scanning as soon as the first data row is encountered.
+    """
     last_header = 0
     for r in range(1, min(max_scan, ws.max_row + 1)):
+        if _is_data_row(ws, r):
+            break  # First data row reached; stop header scan!
+
         row_has_header_kw = False
         for c in range(1, min(25, ws.max_column + 1)):
             v = ws.cell(row=r, column=c).value
@@ -719,6 +742,7 @@ def _find_header_end_row(ws, max_scan: int = 15) -> int:
                     break
         if row_has_header_kw:
             last_header = r
+
     return last_header if last_header > 0 else 6
 
 
@@ -743,14 +767,9 @@ def _get_last_data_row(ws, header_offset: int = 6) -> tuple[int, int]:
     last_data = header_end
 
     for r in range(ws.max_row, header_end, -1):
-        v1 = ws.cell(row=r, column=1).value
-        v2 = ws.cell(row=r, column=2).value
-        if (v1 is not None and str(v1).strip() != "") or (v2 is not None and str(v2).strip() != ""):
-            v1_str = str(v1 or "").strip().lower()
-            v2_str = str(v2 or "").strip().lower()
-            if not any(kw in v1_str or kw in v2_str for kw in HEADER_KEYWORDS):
-                last_data = r
-                break
+        if _is_data_row(ws, r):
+            last_data = r
+            break
 
     return header_end, last_data
 
