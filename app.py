@@ -809,6 +809,101 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CORE FUNCTION 3: BATCH EXCEL APPEND
+# ─────────────────────────────────────────────────────────────────────────────
+
+def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
+    """
+    Append ALL extracted calibration records (batch) to the two sheets of the
+    Excel template and return the modified workbook as bytes.
+
+    Each device occupies exactly 1 row in Sheet 1 and N point-rows + 1 blank
+    separator row in Sheet 2.
+
+    Parameters
+    ----------
+    excel_path : str or Path
+        Path to the existing Excel template file.
+    data_list  : list[dict]
+        List of validated extraction dicts (one per calibration document).
+
+    Returns
+    -------
+    bytes
+        The in-memory workbook bytes ready for download.
+    """
+    wb = load_workbook(excel_path)
+
+    if len(wb.sheetnames) < 1:
+        raise ValueError("Excel template has no sheets.")
+
+    ws1 = wb.worksheets[0]
+    ws2 = wb.worksheets[1] if len(wb.worksheets) > 1 else wb.create_sheet("Sheet2")
+
+    for extracted_data in data_list:
+        gcn_so          = extracted_data.get("gcn_so", "")
+        ma_id           = extracted_data.get("ma_id", "")
+        ten_uut         = extracted_data.get("ten_uut", "")
+        khach_hang      = extracted_data.get("khach_hang", "")
+        nguoi_thuc_hien = extracted_data.get("nguoi_thuc_hien", "")
+        ngay_hc         = extracted_data.get("ngay_hc", "")
+        ket_qua         = extracted_data.get("ket_qua", "OK")
+        tem_hc          = extracted_data.get("tem_hc", "")
+        ngay_ke_tiep    = extracted_data.get("ngay_ke_tiep", "")
+        tb_chuan_1      = extracted_data.get("tb_chuan_1", "")
+        don_vi          = extracted_data.get("don_vi", "")
+        range_min       = extracted_data.get("range_min", None)
+        range_max       = extracted_data.get("range_max", None)
+        points          = extracted_data.get("points", [])
+
+        # ── Sheet 1: one row per device ───────────────────────────────────
+        next_row_s1 = ws1.max_row + 1
+        if ws1.max_row >= 2:
+            _copy_row_style(ws1, ws1.max_row, next_row_s1)
+
+        row_s1 = [
+            gcn_so, ma_id, ma_id, ten_uut, khach_hang, "",
+            nguoi_thuc_hien, "DLVN76", ngay_hc, ket_qua,
+            tem_hc, ngay_ke_tiep, tb_chuan_1,
+        ]
+        for col_idx, value in enumerate(row_s1, start=1):
+            ws1.cell(row=next_row_s1, column=col_idx, value=value)
+
+        # ── Sheet 2: N point rows + 1 blank separator per device ─────────
+        last_row_s2 = ws2.max_row
+        has_data_s2 = last_row_s2 >= 2
+        if has_data_s2:
+            last_row_s2 += 1  # blank separator row
+
+        style_src = max(2, ws2.max_row - len(points)) if ws2.max_row > 1 else None
+
+        for i, pt in enumerate(points):
+            dest_row = last_row_s2 + 1 + i
+            if style_src:
+                _copy_row_style(ws2, style_src, dest_row)
+
+            point_id = pt.get("point_id", f"D{i+1}")
+            p_value  = _safe_float(pt.get("p_value"))
+            p_tang   = _safe_float(pt.get("p_tang"))
+            p_giam   = _safe_float(pt.get("p_giam"))
+            min_val  = range_min if i == 0 else None
+            max_val  = range_max if i == 0 else None
+
+            row_s2 = [
+                f"{gcn_so}{point_id}", gcn_so, ma_id, don_vi,
+                min_val, max_val, point_id, don_vi, p_value,
+                don_vi, p_tang, p_giam,
+            ]
+            for col_idx, value in enumerate(row_s2, start=1):
+                ws2.cell(row=dest_row, column=col_idx, value=value)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HELPER: Build preview DataFrames from extracted data
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -911,24 +1006,82 @@ def _apply_sheet2_edits(df: pd.DataFrame, data: dict) -> dict:
     return data
 
 
+def _apply_batch_edits(
+    edited_s1: pd.DataFrame,
+    edited_s2: pd.DataFrame,
+    batch_results: list[dict],
+) -> list[dict]:
+    """
+    Merge user edits from the unified data editors back into the batch_results
+    list.  Sheet-1 rows are matched positionally; Sheet-2 rows are grouped by
+    GCN S\u1ed1 and matched to the corresponding batch entry.
+    """
+    updated: list[dict] = []
+    for i, data in enumerate(batch_results):
+        d = dict(data)
+
+        # ── apply Sheet-1 edits (positional) ─────────────────────────────
+        if not edited_s1.empty and i < len(edited_s1):
+            row = edited_s1.iloc[i]
+            d["gcn_so"]          = str(row.get("GCN S\u1ed1", d.get("gcn_so", "")))
+            d["ma_id"]           = str(row.get("M\u00e3 ID", d.get("ma_id", "")))
+            d["ten_uut"]         = str(row.get("T\u00ean UUT", d.get("ten_uut", "")))
+            d["khach_hang"]      = str(row.get("Kh\u00e1ch h\u00e0ng", d.get("khach_hang", "")))
+            d["nguoi_thuc_hien"] = str(row.get("Ng\u01b0\u1eddi th\u1ef1c hi\u1ec7n", d.get("nguoi_thuc_hien", "")))
+            d["ngay_hc"]         = str(row.get("Ng\u00e0y hi\u1ec7u chu\u1ea9n", d.get("ngay_hc", "")))
+            d["ket_qua"]         = str(row.get("K\u1ebft qu\u1ea3 HC", d.get("ket_qua", "OK")))
+            d["tem_hc"]          = str(row.get("Tem hi\u1ec7u chu\u1ea9n", d.get("tem_hc", "")))
+            d["ngay_ke_tiep"]    = str(row.get("Ng\u00e0y HC k\u1ebf ti\u1ebfp", d.get("ngay_ke_tiep", "")))
+            d["tb_chuan_1"]      = str(row.get("TB Chu\u1ea9n 1", d.get("tb_chuan_1", "")))
+
+        # ── apply Sheet-2 edits (group by GCN S\u1ed1) ────────────────────────────
+        gcn = d.get("gcn_so", "")
+        if gcn and not edited_s2.empty and "GCN S\u1ed1" in edited_s2.columns:
+            device_rows = edited_s2[edited_s2["GCN S\u1ed1"].astype(str) == gcn]
+            if not device_rows.empty:
+                d["don_vi"] = str(device_rows.iloc[0].get("\u0110.v\u1ecb", d.get("don_vi", "")))
+                first_min = device_rows[
+                    device_rows["Min"].astype(str).str.strip().replace("nan", "") != ""
+                ]
+                if not first_min.empty:
+                    d["range_min"] = _safe_float(first_min.iloc[0].get("Min"))
+                    d["range_max"] = _safe_float(first_min.iloc[0].get("Max"))
+                points: list[dict] = []
+                for _, pt_row in device_rows.iterrows():
+                    points.append({
+                        "point_id": str(pt_row.get("\u0110i\u1ec3m HC", "")),
+                        "p_value":  _safe_float(pt_row.get("P")),
+                        "p_tang":   _safe_float(pt_row.get("P c.t\u0103ng")),
+                        "p_giam":   _safe_float(pt_row.get("P c.gi\u1ea3m")),
+                    })
+                d["points"] = points
+
+        updated.append(d)
+    return updated
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN STREAMLIT APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     # ── Session state initialisation ──────────────────────────────────────
-    if "extracted_data" not in st.session_state:
-        st.session_state.extracted_data = {}
-    if "extraction_done" not in st.session_state:
-        st.session_state.extraction_done = False
-    if "excel_bytes" not in st.session_state:
-        st.session_state.excel_bytes = None
-    if "processing" not in st.session_state:
-        st.session_state.processing = False
-    if "available_models" not in st.session_state:
-        st.session_state.available_models = GEMINI_MODELS
-    if "selected_model" not in st.session_state:
-        st.session_state.selected_model = GEMINI_MODELS[0]
+    _ss_defaults: dict = {
+        "extracted_data": {},
+        "extraction_done": False,
+        "excel_bytes": None,
+        "processing": False,
+        "available_models": GEMINI_MODELS,
+        "selected_model": GEMINI_MODELS[0],
+        # Batch-specific state
+        "batch_results": [],     # list[dict] — one per successfully parsed file
+        "batch_errors": [],      # list[{filename, error}] — failed files
+        "batch_done": False,
+        "batch_excel_bytes": None,
+    }
+    for _k, _v in _ss_defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
 
     # ── SIDEBAR ───────────────────────────────────────────────────────────
     with st.sidebar:
@@ -938,7 +1091,7 @@ def main():
             "<span style='font-size:1.05rem; font-weight:700; color:#63b3ed;'>"
             "CalibParser AI</span><br>"
             "<span style='font-size:.75rem; color:rgba(255,255,255,.4);'>"
-            "Pressure Calibration Suite</span></div>",
+            "Batch Edition · Pressure Calibration Suite</span></div>",
             unsafe_allow_html=True,
         )
         st.divider()
@@ -1043,10 +1196,33 @@ def main():
             st.success(f"📁 `{excel_file.name}` loaded", icon="✅")
             st.caption(f"Size: {excel_file.size / 1024:.1f} KB")
 
+        # ── Reset batch ──────────────────────────────────────────────────
+        if st.session_state.batch_done and st.session_state.batch_results:
+            st.divider()
+            st.markdown(
+                "<div class='section-header'>🔄 Batch Controls</div>",
+                unsafe_allow_html=True,
+            )
+            n_ok  = len(st.session_state.batch_results)
+            n_err = len(st.session_state.batch_errors)
+            st.markdown(
+                f"<div style='font-size:.82rem; color:#8a9bc4; margin-bottom:8px;'>"
+                f"✅ <b style='color:#68d391;'>{n_ok}</b> file OK"
+                + (f" &nbsp;|&nbsp; ❌ <b style='color:#fc8181;'>{n_err}</b> lỗi" if n_err else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("🗑️ Xóa kết quả & bắt đầu lại", use_container_width=True):
+                st.session_state.batch_results = []
+                st.session_state.batch_errors  = []
+                st.session_state.batch_done    = False
+                st.session_state.batch_excel_bytes = None
+                st.rerun()
+
         st.divider()
         st.markdown(
             "<div style='text-align:center; font-size:.72rem; color:rgba(255,255,255,.3);'>"
-            "Powered by Google Gemini AI<br>& openpyxl</div>",
+            "Powered by Google Gemini AI<br>&amp; openpyxl · Batch Edition</div>",
             unsafe_allow_html=True,
         )
 
@@ -1054,9 +1230,9 @@ def main():
     st.markdown(
         """
         <div class="hero-banner">
-            <div class="hero-title">🔬 Pressure Calibration Parser</div>
+            <div class="hero-title">🔬 Pressure Calibration Parser — Batch Edition</div>
             <div class="hero-sub">
-                AI tự động đọc phiếu hiệu chuẩn áp suất viết tay → xuất dữ liệu vào Excel
+                AI đọc hàng loạt phiếu hiệu chuẩn áp suất viết tay → tổng hợp &amp; xuất toàn bộ vào Excel chỉ 1 click
             </div>
         </div>
         """,
@@ -1118,149 +1294,245 @@ def main():
             unsafe_allow_html=True,
         )
 
-    # ── STEP INDICATORS ───────────────────────────────────────────────────
-    col_s1, col_s2, col_s3 = st.columns(3)
-    with col_s1:
-        st.markdown(
-            '<div class="metric-pill">'
-            '<div class="metric-value">①</div>'
-            '<div class="metric-label">Upload phiếu hiệu chuẩn</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with col_s2:
-        st.markdown(
-            '<div class="metric-pill">'
-            '<div class="metric-value">②</div>'
-            '<div class="metric-label">AI trích xuất dữ liệu</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    with col_s3:
-        st.markdown(
-            '<div class="metric-pill">'
-            '<div class="metric-value">③</div>'
-            '<div class="metric-label">Kiểm tra &amp; lưu Excel</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
+    # ── STEP INDICATORS (4 bước) ─────────────────────────────────────────
+    _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+    _steps = [
+        (_sc1, "①", "Upload hàng loạt file"),
+        (_sc2, "②", "AI trích xuất tất cả"),
+        (_sc3, "③", "Review &amp; chỉnh sửa"),
+        (_sc4, "④", "Lưu Excel 1-Click"),
+    ]
+    for _col, _num, _lbl in _steps:
+        with _col:
+            st.markdown(
+                f'<div class="metric-pill">'
+                f'<div class="metric-value">{_num}</div>'
+                f'<div class="metric-label">{_lbl}</div>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    # SECTION 1 — Document Upload & Extraction
+    # SECTION 1 — Batch Upload
     # ─────────────────────────────────────────────────────────────────────
     st.markdown(
         "<div class='glass-card'>"
-        "<div class='section-header'>📄 Bước 1 — Upload phiếu hiệu chuẩn</div>"
+        "<div class='section-header'>📄 Bước 1 — Upload hàng loạt phiếu hiệu chuẩn</div>"
         "<p style='color:#94a3c0; font-size:.87rem; margin:-6px 0 14px;'>"
-        "Kéo thả file vào ô bên dưới, hoặc click <b style='color:#c8d4ee;'>Browse files</b> để chọn từ máy tính. "
+        "Kéo thả <b style='color:#c8d4ee;'>nhiều file cùng lúc</b> vào ô bên dưới, "
+        "hoặc click <b style='color:#c8d4ee;'>Browse files</b> để chọn. "
         "Hỗ trợ: <b style='color:#63b3ed;'>PDF</b> (nhiều trang), "
         "<b style='color:#63b3ed;'>PNG</b>, <b style='color:#63b3ed;'>JPG/JPEG</b>."
         "</p>",
         unsafe_allow_html=True,
     )
 
-    uploaded_file = st.file_uploader(
-        "Drop your calibration report here",
+    uploaded_files = st.file_uploader(
+        "Drop your calibration reports here",
         type=["pdf", "png", "jpg", "jpeg"],
-        accept_multiple_files=False,
-        help="Supports: PDF (multi-page), PNG, JPG/JPEG. Handwritten or printed.",
+        accept_multiple_files=True,
+        help="Hỗ trợ chọn nhiều file cùng lúc. PDF (nhiều trang), PNG, JPG/JPEG.",
         key="doc_uploader",
         label_visibility="collapsed",
     )
 
-    if uploaded_file:
-        col_info1, col_info2, col_info3 = st.columns(3)
-        with col_info1:
-            st.info(f"📄 **File:** `{uploaded_file.name}`")
-        with col_info2:
-            st.info(f"📦 **Size:** {uploaded_file.size / 1024:.1f} KB")
-        with col_info3:
-            st.info(f"🗂️ **Type:** `{uploaded_file.type}`")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ─────────────────────────────────────────────────────────────────────
-    # SECTION 2 — AI Extraction Trigger
-    # ─────────────────────────────────────────────────────────────────────
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='section-header'>🤖 Step 2 — Extract Data with AI</div>",
-        unsafe_allow_html=True,
-    )
-
-    extract_col, spacer = st.columns([1, 3])
-    with extract_col:
-        extract_btn = st.button(
-            "⚡ Extract Data with AI",
-            use_container_width=True,
-            type="primary",
-            disabled=(uploaded_file is None or not api_key),
-        )
-
-    if not api_key:
-        st.warning("⚠️ Please enter your Google API key in the sidebar first.", icon="⚠️")
-    if uploaded_file is None:
-        st.info("ℹ️ Upload a calibration document above to begin.", icon="ℹ️")
-
-    if extract_btn and uploaded_file and api_key:
-        file_bytes = uploaded_file.read()
-        mime_type = uploaded_file.type or "application/octet-stream"
-
-        with st.spinner("🔍 Analysing document with Gemini AI — please wait…"):
-            try:
-                result = extract_data_from_document(
-                    file_bytes=file_bytes,
-                    mime_type=mime_type,
-                    api_key=api_key,
-                    model_name=model_name,
-                )
-                st.session_state.extracted_data = result
-                st.session_state.extraction_done = True
-                st.session_state.excel_bytes = None  # reset previous output
-                st.success(
-                    f"✅ Extraction complete! Found **{len(result.get('points', []))}** "
-                    "calibration points.",
-                    icon="🎉",
-                )
-            except Exception as exc:
-                st.error(f"❌ Extraction failed: {exc}", icon="🚨")
-                with st.expander("📋 Full traceback"):
-                    st.code(traceback.format_exc(), language="python")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ─────────────────────────────────────────────────────────────────────
-    # SECTION 3 — Review & Edit Extracted Data
-    # ─────────────────────────────────────────────────────────────────────
-    if st.session_state.extraction_done and st.session_state.extracted_data:
-        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    if uploaded_files:
+        n_files = len(uploaded_files)
+        total_kb = sum(f.size for f in uploaded_files) / 1024
         st.markdown(
-            "<div class='section-header'>✏️ Step 3 — Review & Edit Extracted Data</div>",
+            f"<div style='background:rgba(99,179,237,0.07); border:1px solid rgba(99,179,237,0.15); "
+            f"border-radius:10px; padding:12px 16px; margin-top:10px;'>"
+            f"<span style='color:#63b3ed; font-weight:600;'>📦 {n_files} file đã chọn</span> "
+            f"<span style='color:#8a9bc4; font-size:.85rem;'>— Tổng: {total_kb:.1f} KB</span></div>",
+            unsafe_allow_html=True,
+        )
+        file_rows_html = ""
+        for i, f in enumerate(uploaded_files, 1):
+            icon = "📄" if "pdf" in f.type else "🖼️"
+            file_rows_html += (
+                f"<tr><td style='padding:4px 10px; color:#8a9bc4;'>#{i}</td>"
+                f"<td style='padding:4px 10px;'>{icon} {f.name}</td>"
+                f"<td style='padding:4px 10px; color:#a78bfa;'>{f.size/1024:.1f} KB</td>"
+                f"<td style='padding:4px 10px; color:#63b3ed;'>{f.type}</td></tr>"
+            )
+        st.markdown(
+            f"<table style='width:100%; font-size:.83rem; color:#c8d4ee; margin-top:8px; border-collapse:collapse;'>"
+            f"<thead><tr style='border-bottom:1px solid rgba(255,255,255,.1);'>"
+            f"<th style='padding:4px 10px; text-align:left; color:#8a9bc4; font-weight:500;'>#</th>"
+            f"<th style='padding:4px 10px; text-align:left; color:#8a9bc4; font-weight:500;'>Tên file</th>"
+            f"<th style='padding:4px 10px; text-align:left; color:#8a9bc4; font-weight:500;'>Kích thước</th>"
+            f"<th style='padding:4px 10px; text-align:left; color:#8a9bc4; font-weight:500;'>Loại</th>"
+            f"</tr></thead><tbody>{file_rows_html}</tbody></table>",
             unsafe_allow_html=True,
         )
 
-        # ── Raw JSON toggle ──────────────────────────────────────────────
-        with st.expander("🔍 View Raw AI JSON Response"):
-            st.json(st.session_state.extracted_data)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 2 — Batch AI Extraction with Progress
+    # ─────────────────────────────────────────────────────────────────────
+    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='section-header'>🤖 Bước 2 — Trích xuất AI hàng loạt</div>",
+        unsafe_allow_html=True,
+    )
+
+    n_uploaded = len(uploaded_files) if uploaded_files else 0
+    if n_uploaded > 1:
+        _btn_label = f"🚀 Trích xuất tất cả {n_uploaded} file"
+    elif n_uploaded == 1:
+        _btn_label = "⚡ Trích xuất file"
+    else:
+        _btn_label = "🚀 Trích xuất tất cả các file"
+
+    _ext_col, _spacer = st.columns([1, 3])
+    with _ext_col:
+        extract_btn = st.button(
+            _btn_label,
+            use_container_width=True,
+            type="primary",
+            disabled=(not uploaded_files or not api_key),
+            key="btn_extract_batch",
+        )
+
+    if not api_key:
+        st.warning("⚠️ Vui lòng nhập Google API Key ở thanh Sidebar bên trái.", icon="⚠️")
+    if not uploaded_files:
+        st.info("ℹ️ Upload ít nhất 1 file phiếu hiệu chuẩn ở Bước 1 để bắt đầu.", icon="ℹ️")
+
+    if extract_btn and uploaded_files and api_key:
+        _n = len(uploaded_files)
+        _batch_results: list[dict] = []
+        _batch_errors:  list[dict] = []
+
+        _progress_bar  = st.progress(0.0, text="Chuẩn bị...")
+        _status_slot   = st.empty()
+        _log_slot      = st.empty()
+        _log_lines: list[str] = []
+
+        for _i, _uf in enumerate(uploaded_files):
+            _progress_bar.progress(_i / _n, text=f"Đang xử lý {_i+1}/{_n}...")
+            _status_slot.markdown(
+                f"<div style='background:rgba(99,179,237,0.08); border-left:3px solid #63b3ed; "
+                f"border-radius:8px; padding:10px 16px; margin:6px 0; font-size:.9rem; color:#c8d4ee;'>"
+                f"⚙️ <b>Đang xử lý file {_i+1}/{_n}:</b> <code>{_uf.name}</code></div>",
+                unsafe_allow_html=True,
+            )
+            try:
+                _file_bytes = _uf.read()
+                _mime = _uf.type or "application/octet-stream"
+                _result = extract_data_from_document(
+                    file_bytes=_file_bytes,
+                    mime_type=_mime,
+                    api_key=api_key,
+                    model_name=model_name,
+                )
+                _result["_source_file"] = _uf.name
+                _batch_results.append(_result)
+                _n_pts = len(_result.get("points", []))
+                _log_lines.append(
+                    f"✅ <b>{_uf.name}</b> — GCN: {_result.get('gcn_so','?')} "
+                    f"| Mã: {_result.get('ma_id','?')} | {_n_pts} điểm đo"
+                )
+            except Exception as _exc:
+                _batch_errors.append({"filename": _uf.name, "error": str(_exc)})
+                _log_lines.append(
+                    f"❌ <b>{_uf.name}</b> — Lỗi: {str(_exc)[:120]}"
+                )
+
+            _log_html = "".join(
+                f"<div style='font-size:.82rem; padding:2px 0; color:#c8d4ee;'>{_ln}</div>"
+                for _ln in _log_lines
+            )
+            _log_slot.markdown(
+                f"<div style='background:rgba(0,0,0,.25); border-radius:10px; "
+                f"padding:12px 16px; margin-top:8px;'>{_log_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+        _progress_bar.progress(1.0, text="Hoàn tất!")
+        _n_ok  = len(_batch_results)
+        _n_err = len(_batch_errors)
+        _status_slot.markdown(
+            f"<div style='background:rgba(104,211,145,0.1); border-left:3px solid #68d391; "
+            f"border-radius:8px; padding:10px 16px; font-size:.9rem; color:#c8d4ee;'>"
+            f"🎉 <b>Hoàn tất!</b> Thành công: <b style='color:#68d391;'>{_n_ok}/{_n}</b> file"
+            + (f" &nbsp;|&nbsp; Lỗi: <b style='color:#fc8181;'>{_n_err}</b> file" if _n_err else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.session_state.batch_results    = _batch_results
+        st.session_state.batch_errors     = _batch_errors
+        st.session_state.batch_done       = True
+        st.session_state.batch_excel_bytes = None
+
+        if _n_ok > 0:
+            _total_pts = sum(len(r.get("points", [])) for r in _batch_results)
+            st.success(
+                f"✅ Đã trích xuất **{_n_ok}** phiếu — tổng cộng **{_total_pts}** điểm đo.",
+                icon="🎉",
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SECTION 3 — Unified Review & Edit Table
+    # ─────────────────────────────────────────────────────────────────────
+    if st.session_state.batch_done and st.session_state.batch_results:
+        _br = st.session_state.batch_results
+        _be = st.session_state.batch_errors
+
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-header'>✏️ Bước 3 — Xem trước &amp; Chỉnh sửa dữ liệu tổng hợp</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Summary metrics ───────────────────────────────────────────────
+        _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+        with _mc1:
+            st.metric("📦 File thành công", len(_br))
+        with _mc2:
+            st.metric("🔖 Tổng thiết bị", len(_br))
+        with _mc3:
+            st.metric("📐 Tổng điểm đo", sum(len(r.get("points", [])) for r in _br))
+        with _mc4:
+            st.metric("⚠️ File lỗi", len(_be))
+
+        if _be:
+            with st.expander(f"⚠️ {len(_be)} file gặp lỗi — click để xem chi tiết"):
+                for _err in _be:
+                    st.error(f"❌ **{_err['filename']}**: {_err['error']}", icon="🚨")
 
         st.markdown("---")
 
-        # ── SHEET 1 EDITOR ───────────────────────────────────────────────
-        st.markdown("#### 📋 Sheet 1 — General / Header Information")
-        st.caption(
-            "Review and correct the general calibration report information below. "
-            "Click any cell to edit."
-        )
+        with st.expander("🔍 Xem dữ liệu JSON thô của tất cả file"):
+            st.json(_br)
 
-        df_s1 = _build_sheet1_df(st.session_state.extracted_data)
+        st.markdown("---")
+
+        # ── SHEET 1 UNIFIED EDITOR ────────────────────────────────────────
+        st.markdown(
+            "<div style='font-size:1rem; font-weight:600; color:#c8d4ee; margin-bottom:6px;'>"
+            "📋 Sheet 1 — Thông tin chung (mỗi hàng = 1 phiếu hiệu chuẩn)</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Mỗi hàng tương ứng với 1 phiếu. Index (#) = thứ tự file. "
+            "Click vào ô bất kỳ để chỉnh sửa trực tiếp."
+        )
+        df_all_s1 = pd.concat(
+            [_build_sheet1_df(d) for d in _br], ignore_index=True
+        )
         edited_s1 = st.data_editor(
-            df_s1,
+            df_all_s1,
             use_container_width=True,
             num_rows="fixed",
-            hide_index=True,
-            key="editor_sheet1",
+            hide_index=False,
+            key="batch_editor_sheet1",
             column_config={
                 "GCN Số":           st.column_config.TextColumn("GCN Số", width="medium"),
                 "Mã ID":            st.column_config.TextColumn("Mã ID", width="medium"),
@@ -1284,20 +1556,26 @@ def main():
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── SHEET 2 EDITOR ───────────────────────────────────────────────
-        st.markdown("#### 📊 Sheet 2 — Measurement Points")
-        st.caption(
-            "Review the extracted calibration measurement table. "
-            "You can add, remove, or correct individual readings."
+        # ── SHEET 2 UNIFIED EDITOR ────────────────────────────────────────
+        st.markdown(
+            "<div style='font-size:1rem; font-weight:600; color:#c8d4ee; margin-bottom:6px;'>"
+            "📊 Sheet 2 — Số liệu đo tổng hợp (tất cả điểm hiệu chuẩn)</div>",
+            unsafe_allow_html=True,
         )
-
-        df_s2 = _build_sheet2_df(st.session_state.extracted_data)
+        st.caption(
+            "Bảng tổng hợp tất cả điểm đo của mọi thiết bị. "
+            "Các thiết bị được phân biệt theo cột GCN Số. "
+            "Click vào ô bất kỳ để chỉnh sửa."
+        )
+        df_all_s2 = pd.concat(
+            [_build_sheet2_df(d) for d in _br], ignore_index=True
+        )
         edited_s2 = st.data_editor(
-            df_s2,
+            df_all_s2,
             use_container_width=True,
             num_rows="dynamic",
-            hide_index=True,
-            key="editor_sheet2",
+            hide_index=False,
+            key="batch_editor_sheet2",
             column_config={
                 "Mã Phụ":          st.column_config.TextColumn("Mã Phụ", width="large"),
                 "GCN Số":          st.column_config.TextColumn("GCN Số", width="medium"),
@@ -1316,101 +1594,85 @@ def main():
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ── Summary metrics ───────────────────────────────────────────────
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("📌 GCN Số", st.session_state.extracted_data.get("gcn_so", "—"))
-        with m2:
-            st.metric("🔖 Mã ID", st.session_state.extracted_data.get("ma_id", "—"))
-        with m3:
-            n_pts = len(st.session_state.extracted_data.get("points", []))
-            st.metric("📐 Calibration Points", n_pts)
-        with m4:
-            st.metric("📏 Range", (
-                f"{st.session_state.extracted_data.get('range_min', '?')} – "
-                f"{st.session_state.extracted_data.get('range_max', '?')} "
-                f"{st.session_state.extracted_data.get('don_vi', '')}"
-            ))
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
         # ─────────────────────────────────────────────────────────────────
-        # SECTION 4 — Save to Excel
+        # SECTION 4 — One-Click Save & Append to Excel
         # ─────────────────────────────────────────────────────────────────
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown(
-            "<div class='section-header'>💾 Step 4 — Save & Append to Excel</div>",
+            "<div class='section-header'>💾 Bước 4 — Lưu tất cả vào Excel (1-Click)</div>",
             unsafe_allow_html=True,
         )
 
         if excel_file is None:
             st.warning(
-                "⚠️ No Excel template uploaded. Please upload your `.xlsx` template in the sidebar.",
+                "⚠️ Chưa upload file Excel mẫu. Hãy upload file `.xlsx` (2 sheet) ở Sidebar bên trái.",
                 icon="📊",
             )
         else:
-            save_col, dl_col = st.columns([1, 1])
-            with save_col:
+            _n_devices = len(_br)
+            _save_col, _dl_col = st.columns([1, 1])
+            with _save_col:
                 save_btn = st.button(
-                    "💾 Save & Append to Excel",
+                    f"💾 Lưu tất cả {_n_devices} thiết bị vào Excel",
                     use_container_width=True,
                     type="primary",
+                    key="btn_save_all",
                 )
 
             if save_btn:
-                # Apply user edits back into extracted_data
-                updated_data = dict(st.session_state.extracted_data)
-                updated_data = _apply_sheet1_edits(edited_s1, updated_data)
-                updated_data = _apply_sheet2_edits(edited_s2, updated_data)
-                st.session_state.extracted_data = updated_data
+                # Merge edits from unified tables back into batch_results
+                _updated_batch = _apply_batch_edits(edited_s1, edited_s2, _br)
+                st.session_state.batch_results = _updated_batch
 
-                with st.spinner("⚙️ Writing data to Excel — please wait…"):
+                with st.spinner(
+                    f"⚙️ Đang ghi {_n_devices} thiết bị vào Excel — vui lòng chờ…"
+                ):
                     try:
-                        # Save excel_file to a temp file for openpyxl
                         with tempfile.NamedTemporaryFile(
                             suffix=".xlsx", delete=False
-                        ) as tmp:
-                            tmp.write(excel_file.read())
-                            tmp_path = tmp.name
+                        ) as _tmp:
+                            _tmp.write(excel_file.read())
+                            _tmp_path = _tmp.name
 
-                        excel_bytes = append_to_excel(tmp_path, updated_data)
-                        st.session_state.excel_bytes = excel_bytes
+                        _excel_bytes = append_all_to_excel(_tmp_path, _updated_batch)
+                        st.session_state.batch_excel_bytes = _excel_bytes
 
-                        # Clean up temp file
                         try:
-                            os.unlink(tmp_path)
+                            os.unlink(_tmp_path)
                         except OSError:
                             pass
 
+                        _total_pts_saved = sum(
+                            len(r.get("points", [])) for r in _updated_batch
+                        )
                         st.success(
-                            "✅ Data successfully appended to Excel template!",
+                            f"✅ Đã ghi **{_n_devices}** thiết bị "
+                            f"(**{_total_pts_saved}** điểm đo) vào Excel thành công!",
                             icon="🎉",
                         )
-                    except Exception as exc:
-                        st.error(f"❌ Failed to write Excel: {exc}", icon="🚨")
+                    except Exception as _exc:
+                        st.error(f"❌ Lỗi khi ghi Excel: {_exc}", icon="🚨")
                         with st.expander("📋 Full traceback"):
                             st.code(traceback.format_exc(), language="python")
 
-            # ── Download button ─────────────────────────────────────────
-            if st.session_state.excel_bytes:
-                gcn = st.session_state.extracted_data.get("gcn_so", "output")
-                safe_gcn = re.sub(r"[\\/*?:\"<>|]", "_", gcn)
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"CalibReport_{safe_gcn}_{ts}.xlsx"
+            # ── Download button ──────────────────────────────────────────
+            if st.session_state.batch_excel_bytes:
+                _ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _filename = f"CalibReport_Batch_{_n_devices}thietbi_{_ts}.xlsx"
 
-                with dl_col:
+                with _dl_col:
                     st.download_button(
-                        label="⬇️ Download Updated Excel",
-                        data=st.session_state.excel_bytes,
-                        file_name=filename,
+                        label=f"⬇️ Tải file Excel ({_n_devices} thiết bị)",
+                        data=st.session_state.batch_excel_bytes,
+                        file_name=_filename,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                         type="secondary",
                     )
 
                 st.info(
-                    f"📥 Your file **`{filename}`** is ready for download. "
-                    "All existing formatting, formulas, and other data in your template are preserved.",
+                    f"📥 File **`{_filename}`** đã sẵn sàng tải về. "
+                    "Tất cả định dạng, công thức và dữ liệu cũ trong file template được giữ nguyên.",
                     icon="✅",
                 )
 
@@ -1420,7 +1682,7 @@ def main():
     st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown(
         "<div style='text-align:center; color:rgba(255,255,255,.25); font-size:.75rem;'>"
-        "CalibParser AI · Built with Streamlit + Google Gemini + openpyxl"
+        "CalibParser AI · Batch Edition · Built with Streamlit + Google Gemini + openpyxl"
         "</div>",
         unsafe_allow_html=True,
     )

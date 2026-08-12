@@ -1,15 +1,17 @@
-# 🔬 Pressure Calibration Report Parser AI
+# 🔬 Pressure Calibration Report Parser AI — Batch Edition
 
-Ứng dụng Full-Stack Python xử lý biên bản hiệu chuẩn áp suất chữ viết tay bằng **Google Gemini Vision AI** và tự động ghi/append dữ liệu có cấu trúc vào file **Excel template 2 sheet** bằng `openpyxl`.
+Ứng dụng Full-Stack Python xử lý **hàng loạt** biên bản hiệu chuẩn áp suất chữ viết tay bằng **Google Gemini Vision AI** và tự động ghi/append **toàn bộ dữ liệu** vào file **Excel template 2 sheet** chỉ với **1 Click**, sử dụng `openpyxl`.
 
 ---
 
 ## 🌟 Tính năng nổi bật
 
+* **🚀 Batch Upload & Processing (MỚI v2.0):** Upload **nhiều file PDF/ảnh cùng lúc**, hệ thống tự động xử lý lần lượt từng file với **thanh tiến trình** (`st.progress`) hiển thị trạng thái theo từng file theo thời gian thực.
+* **📋 Bảng tổng hợp thống nhất (MỚI v2.0):** Sau khi trích xuất, **tất cả dữ liệu** của các thiết bị được gộp vào **1 bảng Sheet 1** (mỗi hàng = 1 thiết bị) và **1 bảng Sheet 2** (tất cả điểm đo), có thể chỉnh sửa trực tiếp trước khi lưu.
+* **💾 Ghi liên tiếp 1-Click (MỚI v2.0):** Nút "💾 Lưu tất cả vào Excel" ghi **toàn bộ N thiết bị** vào Sheet 1 (N hàng) và Sheet 2 (N × điểm đo, cách nhau 1 dòng trống) chỉ với 1 thao tác.
 * **🤖 Đọc chữ viết tay tiếng Việt xuất sắc:** Sử dụng **Google Gemini AI** (hỗ trợ `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-pro`,...) để nhận diện hình ảnh/PDF phiếu hiệu chuẩn áp suất viết tay hoặc in.
-* **🛡️ Cơ chế Kháng lỗi 503 & Rate Limit:** Tự động thử lại (Exponential Backoff) và tự chuyển sang model dự phòng (Model Fallback) khi máy chủ Google quá tải.
+* **🛡️ Cơ chế Kháng lỗi 503 & Rate Limit:** Tự động thử lại (Exponential Backoff) và tự chuyển sang model dự phòng (Model Fallback) khi máy chủ Google quá tải. Các file lỗi được ghi log riêng, không dừng toàn bộ batch.
 * **🔍 Tự động quét Model khả dụng:** Tích hợp tính năng quét toàn bộ model active từ Google API Key của người dùng.
-* **✏️ Kiểm tra & Sửa dữ liệu trực tiếp:** Cho phép chỉnh sửa tay trực tiếp trên bảng dữ liệu (Streamlit Interactive Data Editor) trước khi lưu vào Excel.
 * **📊 Bảo tồn định dạng Excel:** Sử dụng `openpyxl` nối tiếp dữ liệu vào cuối 2 sheet mà không làm mất định dạng, công thức, font chữ hay khung viền có sẵn của file template `.xlsx`.
 * **🎨 Giao diện Dark-Mode cao cấp:** Thiết kế hiện đại, tương phản cao, tối ưu từng khung nhập liệu và nhãn giúp dễ quan sát.
 
@@ -107,15 +109,16 @@ Truy cập giao diện Web tại địa chỉ: `http://localhost:8501`
 
 ---
 
-## 📖 Quy trình sử dụng 4 bước trên Web UI
+## 📖 Quy trình sử dụng Batch — 4 bước trên Web UI
 
 1. **🔑 Cấu hình:** Nhập Google API Key ở Sidebar. Bấm nút **🔍 Lấy danh sách model** để chọn model mạnh nhất (`gemini-2.5-flash` / `gemini-2.5-pro`).
-2. **📄 Upload:** Kéo thả file PDF hoặc ảnh chụp phiếu hiệu chuẩn vào Bước 1. (Nếu có file Excel mẫu 2 sheet, upload ở Sidebar).
-3. **⚡ Trích xuất AI:** Nhấn nút **Extract Data with AI**. Hệ thống sẽ đọc chữ viết tay và hiển thị 2 bảng dữ liệu xem trước.
-4. **💾 Kiểm tra & Xuất Excel:** Chỉnh sửa trực tiếp trên bảng nếu cần, sau đó bấm **Save & Append to Excel** để tải file Excel kết quả về máy.
+2. **📄 Upload hàng loạt:** Kéo thả hoặc chọn **nhiều file PDF / ảnh** cùng một lúc vào ô upload ở Bước 1. (Nếu có file Excel mẫu 2 sheet, upload ở Sidebar.)
+3. **⚡ Trích xuất AI hàng loạt:** Nhấn nút **🚀 Trích xuất tất cả N file**. Hệ thống lần lượt gọi Gemini API cho từng file, hiển thị thanh tiến trình và log theo thời gian thực.
+4. **💾 Kiểm tra & Lưu 1-Click:** Xem bảng tổng hợp tất cả thiết bị, chỉnh sửa ô sai nếu cần, sau đó bấm **💾 Lưu tất cả vào Excel** → toàn bộ dữ liệu được ghi liên tiếp vào file để tải về.
 
 ---
 
 ## 📄 Giấy phép & Tác giả
-* **Được phát triển bởi:** Senior Full-Stack Developer
-* **Phiên bản:** `1.0.0`
+* **Được phát triển bửi:** Senior Full-Stack Developer
+* **Phiên bản:** `2.0.0` — Batch Edition
+* **Tháng:** 08/2026
