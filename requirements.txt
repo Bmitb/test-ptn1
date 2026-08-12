@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pressure Calibration Parser — Python Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Core web framework
+streamlit>=1.35.0
+
+# Google Gemini AI SDK
+google-genai>=0.7.0
+google-generativeai>=0.7.0
+
+
+# Excel manipulation (preserves formatting, formulas, styles)
+openpyxl>=3.1.2
+
+# Data manipulation
+pandas>=2.0.0
+
+# PDF rendering — PyMuPDF (preferred, no external binary dependency)
+pymupdf>=1.24.0
+
+# PDF rendering — pdf2image (alternative, requires Poppler installed separately)
+# pdf2image>=1.17.0
+# Pillow>=10.0.0                # Required by pdf2image
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL / ENVIRONMENT
+# ─────────────────────────────────────────────────────────────────────────────
+# python-dotenv>=1.0.0         # Load GOOGLE_API_KEY from .env file (optional)
