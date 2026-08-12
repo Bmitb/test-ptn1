@@ -704,21 +704,25 @@ HEADER_KEYWORDS = (
     "hệ số chuyển đổi", "giá trị p", "giá trị tương ứng"
 )
 
+HEADER_EXACT_TITLE_STRINGS = (
+    "1", "2", "mã phụ", "mã phụ (tự động)", "gcn số", "phương pháp hc",
+    "mã ql/ mã id", "phạm vi hiệu chuẩn", "c hiệu chuẩn áp suất-vilas 415",
+    "quan trắc hiệu chuẩn áp suất-vilas 415"
+)
+
 
 def _is_data_row(ws, row_idx: int) -> bool:
     """Check if a row contains actual calibration data (starts with GCN/MCLAB or point code)."""
-    v1 = str(ws.cell(row=row_idx, column=1).value or "").strip()
-    v2 = str(ws.cell(row=row_idx, column=2).value or "").strip()
+    v1 = str(ws.cell(row=row_idx, column=1).value or "").strip().lower()
+    v2 = str(ws.cell(row=row_idx, column=2).value or "").strip().lower()
+
     if not v1 and not v2:
         return False
 
-    v1_lower = v1.lower()
-    v2_lower = v2.lower()
-
-    # Exclude template header text
-    if any(kw in v1_lower or kw in v2_lower for kw in ("mã phụ", "gcn số", "1", "2", "quản tắc", "hiệu chuẩn")):
+    if v1 in HEADER_EXACT_TITLE_STRINGS or v2 in HEADER_EXACT_TITLE_STRINGS:
         return False
 
+    # A real data row has a GCN or point code (e.g. MCLAB26CN-1.0012D1 or MCLAB26CN-1.0012)
     return len(v1) > 3 or len(v2) > 3
 
 
@@ -772,6 +776,23 @@ def _get_last_data_row(ws, header_offset: int = 6) -> tuple[int, int]:
             break
 
     return header_end, last_data
+
+
+def _format_sheet1_row(ws, row_idx: int):
+    """Apply clean uniform non-bold formatting to Sheet 1 rows."""
+    thin_side = Side(border_style="thin", color="BFBFBF")
+    clean_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    base_font = Font(name="Arial", size=10, bold=False, color="000000")
+
+    for col in range(1, 14):
+        cell = ws.cell(row=row_idx, column=col)
+        cell.border = copy(clean_border)
+        cell.font = copy(base_font)
+        cell.fill = PatternFill(fill_type=None)
+        if col in (1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13):
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        else:
+            cell.alignment = Alignment(horizontal="left", vertical="center")
 
 
 def _format_sheet2_row(ws, row_idx: int, is_first_point: bool):
@@ -882,9 +903,6 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     for c in range(1, 26):
         ws1.cell(row=next_row_s1, column=c).value = None
 
-    if ws1.max_row >= 2:
-        _copy_row_style(ws1, 2, next_row_s1)
-
     row_s1 = [
         gcn_so, ma_id, ma_id, ten_uut, khach_hang, "",
         nguoi_thuc_hien, "DLVN76", ngay_hc, ket_qua,
@@ -893,6 +911,8 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
 
     for col_idx, value in enumerate(row_s1, start=1):
         ws1.cell(row=next_row_s1, column=col_idx, value=value)
+
+    _format_sheet1_row(ws1, next_row_s1)
 
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 2 — append measurement point rows
@@ -1001,9 +1021,6 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         for c in range(1, 26):
             ws1.cell(row=next_row_s1, column=c).value = None
 
-        if ws1.max_row >= 2:
-            _copy_row_style(ws1, 2, next_row_s1)
-
         row_s1 = [
             gcn_so, ma_id, ma_id, ten_uut, khach_hang, "",
             nguoi_thuc_hien, "DLVN76", ngay_hc, ket_qua,
@@ -1011,6 +1028,8 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         ]
         for col_idx, value in enumerate(row_s1, start=1):
             ws1.cell(row=next_row_s1, column=col_idx, value=value)
+
+        _format_sheet1_row(ws1, next_row_s1)
 
         # ── Sheet 2: N point rows + 1 blank separator per device ─────────
         header_end_s2, last_data_s2 = _get_last_data_row(ws2, header_offset=6)
