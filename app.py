@@ -471,57 +471,6 @@ def fetch_available_models(api_key: str) -> list[str]:
     except Exception as e:
         raise ValueError(f"Không thể lấy danh sách model: {e}")
 
-
-SHEET1_HEADERS = [
-    "GCN Số", "Mã ID", "Mã số nhận dạng", "Tên UUT",
-    "Khách hàng", "Phiếu YCCV", "Người thực hiện", "P.pháp HC",
-    "Ngày hiệu chuẩn", "Kết quả HC", "Tem hiệu chuẩn",
-    "Ngày HC kế tiếp", "TB Chuẩn 1",
-]
-
-SHEET2_HEADERS = [
-    "Mã Phụ", "GCN Số", "Mã QL / Mã ID", "Đ.vị",
-    "Min", "Max", "Điểm HC", "Đơn vị P", "P",
-    "Đơn vị Chuẩn P", "P c.tăng", "P c.giảm",
-]
-
-EXTRACTION_PROMPT = """You are an expert OCR assistant specialising in Vietnamese pressure calibration certificates.
-Analyse the provided document image carefully and extract ALL handwritten and printed information.
-
-Return ONLY a single valid JSON object — no markdown fences, no commentary.
-
-JSON schema (strictly follow this):
-{
-  "gcn_so": "<Báo cáo số / GCN Số / Report No>",
-  "ma_id": "<Mã/ID of the instrument being calibrated>",
-  "ten_uut": "<Loại mẫu / instrument type, e.g. PG, PGPI, Pressure Gauge>",
-  "khach_hang": "<Khách hàng / Customer name>",
-  "nguoi_thuc_hien": "<Full name on Người thực hiện / Technician signature line>",
-  "ngay_hc": "<Ngày HC / Calibration date in DD/MM/YYYY format>",
-  "ket_qua": "<'OK' if Đạt is checked, else 'FAIL'>",
-  "tem_hc": "<Tem hiệu chuẩn / Calibration label number>",
-  "ngay_ke_tiep": "<Ngày tới hạn / Due date in DD/MM/YYYY format>",
-  "tb_chuan_1": "<Mã số TB from the Chuẩn được sử dụng / Reference standard table>",
-  "don_vi": "<unit of pressure, e.g. bar, MPa, kPa, psi>",
-  "range_min": <numeric minimum of calibration range, e.g. 0>,
-  "range_max": <numeric maximum of calibration range, e.g. 700>,
-  "points": [
-    {
-      "point_id": "D1",
-      "p_value": <numeric value of UUT/REF set point>,
-      "p_tang":  <numeric reading during increasing stroke>,
-      "p_giam":  <numeric reading during decreasing stroke>
-    }
-  ]
-}
-
-Rules:
-- Extract ALL calibration data points (D1 … Dn).
-- Use null for any field that cannot be determined.
-- All numeric fields must be numbers, not strings.
-- Return ONLY the JSON object, nothing else.
-"""
-
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -574,8 +523,37 @@ def _copy_row_style(ws, src_row: int, dest_row: int):
             dest_cell.number_format = src_cell.number_format
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CORE FUNCTION 1: DATA EXTRACTION
+def split_pdf_pages(file_bytes: bytes) -> list[bytes]:
+    """
+    Split a PDF into a list of PNG image bytes, one per page.
+    Requires PyMuPDF (fitz). Falls back to pdf2image if fitz is missing.
+    Returns a list of PNG bytes (one element per page).
+    """
+    pages_png: list[bytes] = []
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+            pages_png.append(pix.tobytes("png"))
+        return pages_png
+    except ImportError:
+        pass
+    try:
+        from pdf2image import convert_from_bytes
+        pil_pages = convert_from_bytes(file_bytes, dpi=200)
+        for pil_page in pil_pages:
+            buf = io.BytesIO()
+            pil_page.save(buf, format="PNG")
+            pages_png.append(buf.getvalue())
+        return pages_png
+    except Exception as e:
+        raise ValueError(
+            f"Không thể render PDF. Cài PyMuPDF: `pip install pymupdf`. Lỗi: {e}"
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def extract_data_from_document(
@@ -755,6 +733,94 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     for col_idx, value in enumerate(row_s1, start=1):
         ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
+def _get_style_source_row(ws, is_first_point: bool) -> int | None:
+    """Return template master style source row (2 for D1, 3 for D2+ if available)."""
+    if ws.max_row < 2:
+        return None
+    if is_first_point:
+        return 2
+    return 3 if ws.max_row >= 3 else 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE FUNCTION 2: EXCEL APPEND
+# ─────────────────────────────────────────────────────────────────────────────
+
+def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
+    """
+    Append the extracted calibration data to the two sheets of the Excel
+    template and return the modified workbook as bytes.
+
+    Parameters
+    ----------
+    excel_path     : str or Path
+        Path to the existing Excel template file.
+    extracted_data : dict
+        Validated extraction dict (matching the AI JSON schema).
+
+    Returns
+    -------
+    bytes
+        The in-memory workbook bytes ready for download.
+
+    Raises
+    ------
+    ValueError
+        When required sheets are not found.
+    """
+    wb = load_workbook(excel_path)
+
+    # ── Resolve sheet references (by index or name) ────────────────────────
+    if len(wb.sheetnames) < 1:
+        raise ValueError("Excel template has no sheets.")
+
+    ws1 = wb.worksheets[0]   # Sheet 1 — DANH MỤC HIỆU CHUẨN
+    ws2 = wb.worksheets[1] if len(wb.worksheets) > 1 else wb.create_sheet("Sheet2")
+
+    # ── Unpack data ─────────────────────────────────────────────────────────
+    gcn_so          = extracted_data.get("gcn_so", "")
+    ma_id           = extracted_data.get("ma_id", "")
+    ten_uut         = extracted_data.get("ten_uut", "")
+    khach_hang      = extracted_data.get("khach_hang", "")
+    nguoi_thuc_hien = extracted_data.get("nguoi_thuc_hien", "")
+    ngay_hc         = extracted_data.get("ngay_hc", "")
+    ket_qua         = extracted_data.get("ket_qua", "OK")
+    tem_hc          = extracted_data.get("tem_hc", "")
+    ngay_ke_tiep    = extracted_data.get("ngay_ke_tiep", "")
+    tb_chuan_1      = extracted_data.get("tb_chuan_1", "")
+    don_vi          = extracted_data.get("don_vi", "")
+    range_min       = extracted_data.get("range_min", None)
+    range_max       = extracted_data.get("range_max", None)
+    points          = extracted_data.get("points", [])
+
+    # ────────────────────────────────────────────────────────────────────────
+    # SHEET 1 — append a single row
+    # ────────────────────────────────────────────────────────────────────────
+    next_row_s1 = ws1.max_row + 1
+
+    # Copy style from master data row 2 if available
+    if ws1.max_row >= 2:
+        _copy_row_style(ws1, 2, next_row_s1)
+
+    row_s1 = [
+        gcn_so,           # Col 1
+        ma_id,            # Col 2
+        ma_id,            # Col 3 — Mã số nhận dạng (same as Mã ID)
+        ten_uut,          # Col 4
+        khach_hang,       # Col 5
+        "",               # Col 6 — Phiếu YCCV (empty)
+        nguoi_thuc_hien,  # Col 7
+        "DLVN76",         # Col 8 — P.pháp HC
+        ngay_hc,          # Col 9
+        ket_qua,          # Col 10
+        tem_hc,           # Col 11
+        ngay_ke_tiep,     # Col 12
+        tb_chuan_1,       # Col 13
+    ]
+
+    for col_idx, value in enumerate(row_s1, start=1):
+        ws1.cell(row=next_row_s1, column=col_idx, value=value)
+
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 2 — append measurement point rows
     # ────────────────────────────────────────────────────────────────────────
@@ -765,12 +831,10 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     if has_data_s2:
         last_row_s2 += 1  # blank separator row (leave empty)
 
-    # Determine template style source row
-    style_src = max(2, ws2.max_row - len(points)) if ws2.max_row > 1 else None
-
     for i, pt in enumerate(points):
         dest_row = last_row_s2 + 1 + i
 
+        style_src = _get_style_source_row(ws2, is_first_point=(i == 0))
         if style_src:
             _copy_row_style(ws2, style_src, dest_row)
 
@@ -859,7 +923,7 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         # ── Sheet 1: one row per device ───────────────────────────────────
         next_row_s1 = ws1.max_row + 1
         if ws1.max_row >= 2:
-            _copy_row_style(ws1, ws1.max_row, next_row_s1)
+            _copy_row_style(ws1, 2, next_row_s1)
 
         row_s1 = [
             gcn_so, ma_id, ma_id, ten_uut, khach_hang, "",
@@ -871,14 +935,12 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
 
         # ── Sheet 2: N point rows + 1 blank separator per device ─────────
         last_row_s2 = ws2.max_row
-        has_data_s2 = last_row_s2 >= 2
-        if has_data_s2:
+        if last_row_s2 >= 2:
             last_row_s2 += 1  # blank separator row
-
-        style_src = max(2, ws2.max_row - len(points)) if ws2.max_row > 1 else None
 
         for i, pt in enumerate(points):
             dest_row = last_row_s2 + 1 + i
+            style_src = _get_style_source_row(ws2, is_first_point=(i == 0))
             if style_src:
                 _copy_row_style(ws2, style_src, dest_row)
 
@@ -1407,39 +1469,80 @@ def main():
         _batch_results: list[dict] = []
         _batch_errors:  list[dict] = []
 
-        _progress_bar  = st.progress(0.0, text="Chuẩn bị...")
-        _status_slot   = st.empty()
-        _log_slot      = st.empty()
+        # Count total "units" to process (each PDF page = 1 unit, each image = 1 unit)
+        # We do a quick pre-scan to know how many pages each PDF has
+        _unit_plan: list[dict] = []  # {"file": uf, "file_bytes": bytes, "mime": str, "page": int|None, "label": str}
+        _prescan_slot = st.empty()
+        _prescan_slot.info("⏳ Đang quét số trang PDF...", icon="📚")
+        for _uf in uploaded_files:
+            _fb = _uf.read()
+            _mime = _uf.type or "application/octet-stream"
+            if "pdf" in _mime or _uf.name.lower().endswith(".pdf"):
+                try:
+                    _pages = split_pdf_pages(_fb)
+                    for _pg_idx, _pg_bytes in enumerate(_pages):
+                        _unit_plan.append({
+                            "filename": _uf.name,
+                            "file_bytes": _pg_bytes,
+                            "mime": "image/png",
+                            "page_idx": _pg_idx,
+                            "total_pages": len(_pages),
+                        })
+                except Exception as _e:
+                    _batch_errors.append({"filename": _uf.name, "error": str(_e)})
+            else:
+                _unit_plan.append({
+                    "filename": _uf.name,
+                    "file_bytes": _fb,
+                    "mime": _mime,
+                    "page_idx": None,
+                    "total_pages": 1,
+                })
+        _prescan_slot.empty()
+
+        _n_units = len(_unit_plan)
+        _progress_bar = st.progress(0.0, text="Chuẩn bị...")
+        _status_slot  = st.empty()
+        _log_slot     = st.empty()
         _log_lines: list[str] = []
 
-        for _i, _uf in enumerate(uploaded_files):
-            _progress_bar.progress(_i / _n, text=f"Đang xử lý {_i+1}/{_n}...")
+        for _ui, _unit in enumerate(_unit_plan):
+            _fname   = _unit["filename"]
+            _pg_idx  = _unit["page_idx"]
+            _tot_pg  = _unit["total_pages"]
+            if _pg_idx is not None:
+                _lbl = f"➤ File <b>{_fname}</b> — Trang {_pg_idx + 1}/{_tot_pg}"
+            else:
+                _lbl = f"➤ File <b>{_fname}</b>"
+
+            _progress_bar.progress(_ui / _n_units, text=f"Đang xử lý {_ui+1}/{_n_units}...")
             _status_slot.markdown(
                 f"<div style='background:rgba(99,179,237,0.08); border-left:3px solid #63b3ed; "
                 f"border-radius:8px; padding:10px 16px; margin:6px 0; font-size:.9rem; color:#c8d4ee;'>"
-                f"⚙️ <b>Đang xử lý file {_i+1}/{_n}:</b> <code>{_uf.name}</code></div>",
+                f"⚙️ {_lbl}</div>",
                 unsafe_allow_html=True,
             )
             try:
-                _file_bytes = _uf.read()
-                _mime = _uf.type or "application/octet-stream"
                 _result = extract_data_from_document(
-                    file_bytes=_file_bytes,
-                    mime_type=_mime,
+                    image_bytes=_unit["file_bytes"],
+                    mime_type=_unit["mime"],
                     api_key=api_key,
                     model_name=model_name,
                 )
-                _result["_source_file"] = _uf.name
+                _result["_source_file"] = (
+                    f"{_fname} (trang {_pg_idx+1})"
+                    if _pg_idx is not None else _fname
+                )
                 _batch_results.append(_result)
                 _n_pts = len(_result.get("points", []))
                 _log_lines.append(
-                    f"✅ <b>{_uf.name}</b> — GCN: {_result.get('gcn_so','?')} "
+                    f"✅ {_lbl} — GCN: <b>{_result.get('gcn_so','?')}</b> "
                     f"| Mã: {_result.get('ma_id','?')} | {_n_pts} điểm đo"
                 )
             except Exception as _exc:
-                _batch_errors.append({"filename": _uf.name, "error": str(_exc)})
+                _batch_errors.append({"filename": _lbl, "error": str(_exc)})
                 _log_lines.append(
-                    f"❌ <b>{_uf.name}</b> — Lỗi: {str(_exc)[:120]}"
+                    f"❌ {_lbl} — Lỗi: {str(_exc)[:120]}"
                 )
 
             _log_html = "".join(
@@ -1458,8 +1561,8 @@ def main():
         _status_slot.markdown(
             f"<div style='background:rgba(104,211,145,0.1); border-left:3px solid #68d391; "
             f"border-radius:8px; padding:10px 16px; font-size:.9rem; color:#c8d4ee;'>"
-            f"🎉 <b>Hoàn tất!</b> Thành công: <b style='color:#68d391;'>{_n_ok}/{_n}</b> file"
-            + (f" &nbsp;|&nbsp; Lỗi: <b style='color:#fc8181;'>{_n_err}</b> file" if _n_err else "")
+            f"🎉 <b>Hoàn tất!</b> Thành công: <b style='color:#68d391;'>{_n_ok}/{_n_units}</b> phiếu"
+            + (f" &nbsp;|&nbsp; Lỗi: <b style='color:#fc8181;'>{_n_err}</b>" if _n_err else "")
             + "</div>",
             unsafe_allow_html=True,
         )
@@ -1472,7 +1575,7 @@ def main():
         if _n_ok > 0:
             _total_pts = sum(len(r.get("points", [])) for r in _batch_results)
             st.success(
-                f"✅ Đã trích xuất **{_n_ok}** phiếu — tổng cộng **{_total_pts}** điểm đo.",
+                f"✅ Đã trích xuất **{_n_ok}** phiếu (từ **{_n}** file) — tổng cộng **{_total_pts}** điểm đo.",
                 icon="🎉",
             )
 

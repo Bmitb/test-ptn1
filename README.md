@@ -1,4 +1,4 @@
-# 🔬 Pressure Calibration Report Parser AI — Batch Edition
+# 🔬 Pressure Calibration Report Parser AI — Batch & Multi-page PDF Edition
 
 Ứng dụng Full-Stack Python xử lý **hàng loạt** biên bản hiệu chuẩn áp suất chữ viết tay bằng **Google Gemini Vision AI** và tự động ghi/append **toàn bộ dữ liệu** vào file **Excel template 2 sheet** chỉ với **1 Click**, sử dụng `openpyxl`.
 
@@ -6,9 +6,11 @@
 
 ## 🌟 Tính năng nổi bật
 
-* **🚀 Batch Upload & Processing (MỚI v2.0):** Upload **nhiều file PDF/ảnh cùng lúc**, hệ thống tự động xử lý lần lượt từng file với **thanh tiến trình** (`st.progress`) hiển thị trạng thái theo từng file theo thời gian thực.
+* **📄 Multi-page PDF Auto Splitting (MỚI v2.1):** Tự động tách file PDF nhiều trang thành từng trang/biên bản độc lập (`split_pdf_pages`), trích xuất thông tin riêng cho từng thiết bị và tổng hợp đầy đủ vào Excel.
+* **🚀 Batch Upload & Processing (MỚI v2.0):** Upload **nhiều file PDF/ảnh cùng lúc**, hệ thống tự động xử lý lần lượt từng file/trang với **thanh tiến trình** (`st.progress`) hiển thị trạng thái theo từng file/trang theo thời gian thực.
 * **📋 Bảng tổng hợp thống nhất (MỚI v2.0):** Sau khi trích xuất, **tất cả dữ liệu** của các thiết bị được gộp vào **1 bảng Sheet 1** (mỗi hàng = 1 thiết bị) và **1 bảng Sheet 2** (tất cả điểm đo), có thể chỉnh sửa trực tiếp trước khi lưu.
 * **💾 Ghi liên tiếp 1-Click (MỚI v2.0):** Nút "💾 Lưu tất cả vào Excel" ghi **toàn bộ N thiết bị** vào Sheet 1 (N hàng) và Sheet 2 (N × điểm đo, cách nhau 1 dòng trống) chỉ với 1 thao tác.
+* **🎯 Căn lề & Định dạng chuẩn (MỚI v2.1):** Khắc phục triệt để lỗi căn lề và lệch định dạng trên Sheet 2 cho các thiết bị phía sau bằng cơ chế ánh chiếu dòng mẫu định dạng gốc (Master Template Row).
 * **🤖 Đọc chữ viết tay tiếng Việt xuất sắc:** Sử dụng **Google Gemini AI** (hỗ trợ `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-pro`,...) để nhận diện hình ảnh/PDF phiếu hiệu chuẩn áp suất viết tay hoặc in.
 * **🛡️ Cơ chế Kháng lỗi 503 & Rate Limit:** Tự động thử lại (Exponential Backoff) và tự chuyển sang model dự phòng (Model Fallback) khi máy chủ Google quá tải. Các file lỗi được ghi log riêng, không dừng toàn bộ batch.
 * **🔍 Tự động quét Model khả dụng:** Tích hợp tính năng quét toàn bộ model active từ Google API Key của người dùng.
