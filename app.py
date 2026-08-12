@@ -760,22 +760,46 @@ def _unmerge_row(ws, row_idx: int):
         ws.unmerge_cells(range_string=str(rng))
 
 
-def _get_last_data_row(ws, header_offset: int = 6) -> tuple[int, int]:
+def _get_next_row_sheet1(ws1) -> int:
     """
-    Returns (header_end_row, last_data_row).
-    If no data rows exist yet below header_end_row, last_data_row == header_end_row.
+    In Sheet 1 (DANH MỤC HIỆU CHUẨN), header ends at Row 3.
+    Data starts at Row 4. Returns the next consecutive row index without gaps.
     """
-    header_end = _find_header_end_row(ws)
-    if header_end < header_offset:
-        header_end = header_offset
-    last_data = header_end
+    header_end = 3
+    last_data_row = header_end
+    for r in range(ws1.max_row, header_end, -1):
+        v1 = str(ws1.cell(row=r, column=1).value or "").strip()
+        v2 = str(ws1.cell(row=r, column=2).value or "").strip()
+        if v1 != "" or v2 != "":
+            v1_lower = v1.lower()
+            v2_lower = v2.lower()
+            if v1_lower not in HEADER_EXACT_TITLE_STRINGS and v2_lower not in HEADER_EXACT_TITLE_STRINGS:
+                last_data_row = r
+                break
+    return last_data_row + 1
 
-    for r in range(ws.max_row, header_end, -1):
-        if _is_data_row(ws, r):
+
+def _get_sheet2_start_row(ws2) -> int:
+    """
+    In Sheet 2 (BẢNG KẾT QUẢ HIỆU CHUẨN):
+    - Header is rows 1..6 (or 1..7).
+    - First device starts immediately after header (Row 7 or Row 8).
+    - Subsequent devices start with 1 blank row gap (last_data + 2).
+    """
+    header_end = _find_header_end_row(ws2)
+    if header_end < 6:
+        header_end = 6
+
+    last_data = header_end
+    for r in range(ws2.max_row, header_end, -1):
+        if _is_data_row(ws2, r):
             last_data = r
             break
 
-    return header_end, last_data
+    if last_data > header_end:
+        return last_data + 2  # 1 blank separator row between devices
+    else:
+        return header_end + 1  # first device immediately after header
 
 
 def _format_sheet1_row(ws, row_idx: int):
@@ -894,11 +918,7 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 1 — append a single row
     # ────────────────────────────────────────────────────────────────────────
-    header_end_s1, last_data_s1 = _get_last_data_row(ws1, header_offset=1)
-    if last_data_s1 > header_end_s1:
-        next_row_s1 = last_data_s1 + 1
-    else:
-        next_row_s1 = max(2, header_end_s1 + 1)
+    next_row_s1 = _get_next_row_sheet1(ws1)
     _unmerge_row(ws1, next_row_s1)
     for c in range(1, 26):
         ws1.cell(row=next_row_s1, column=c).value = None
@@ -917,11 +937,7 @@ def append_to_excel(excel_path: str | Path, extracted_data: dict) -> bytes:
     # ────────────────────────────────────────────────────────────────────────
     # SHEET 2 — append measurement point rows
     # ────────────────────────────────────────────────────────────────────────
-    header_end_s2, last_data_s2 = _get_last_data_row(ws2, header_offset=6)
-    if last_data_s2 > header_end_s2:
-        start_row_s2 = last_data_s2 + 2
-    else:
-        start_row_s2 = header_end_s2 + 1
+    start_row_s2 = _get_sheet2_start_row(ws2)
 
     for i, pt in enumerate(points):
         dest_row = start_row_s2 + i
@@ -1012,11 +1028,7 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         points          = extracted_data.get("points", [])
 
         # ── Sheet 1: one row per device ───────────────────────────────────
-        header_end_s1, last_data_s1 = _get_last_data_row(ws1, header_offset=1)
-        if last_data_s1 > header_end_s1:
-            next_row_s1 = last_data_s1 + 1
-        else:
-            next_row_s1 = max(2, header_end_s1 + 1)
+        next_row_s1 = _get_next_row_sheet1(ws1)
         _unmerge_row(ws1, next_row_s1)
         for c in range(1, 26):
             ws1.cell(row=next_row_s1, column=c).value = None
@@ -1032,11 +1044,7 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         _format_sheet1_row(ws1, next_row_s1)
 
         # ── Sheet 2: N point rows + 1 blank separator per device ─────────
-        header_end_s2, last_data_s2 = _get_last_data_row(ws2, header_offset=6)
-        if last_data_s2 > header_end_s2:
-            start_row_s2 = last_data_s2 + 2
-        else:
-            start_row_s2 = header_end_s2 + 1
+        start_row_s2 = _get_sheet2_start_row(ws2)
 
         for i, pt in enumerate(points):
             dest_row = start_row_s2 + i
