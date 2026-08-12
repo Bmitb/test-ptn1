@@ -445,6 +445,56 @@ GEMINI_MODELS = [
     "gemini-pro-latest",         # Pro mới nhất
 ]
 
+SHEET1_HEADERS = [
+    "GCN Số", "Mã ID", "Mã số nhận dạng", "Tên UUT",
+    "Khách hàng", "Phiếu YCCV", "Người thực hiện", "P.pháp HC",
+    "Ngày hiệu chuẩn", "Kết quả HC", "Tem hiệu chuẩn",
+    "Ngày HC kế tiếp", "TB Chuẩn 1",
+]
+
+SHEET2_HEADERS = [
+    "Mã Phụ", "GCN Số", "Mã QL / Mã ID", "Đ.vị",
+    "Min", "Max", "Điểm HC", "Đơn vị P", "P",
+    "Đơn vị Chuẩn P", "P c.tăng", "P c.giảm",
+]
+
+EXTRACTION_PROMPT = """You are an expert OCR assistant specialising in Vietnamese pressure calibration certificates.
+Analyse the provided document image carefully and extract ALL handwritten and printed information.
+
+Return ONLY a single valid JSON object — no markdown fences, no commentary.
+
+JSON schema (strictly follow this):
+{
+  "gcn_so": "<Báo cáo số / GCN Số / Report No>",
+  "ma_id": "<Mã/ID of the instrument being calibrated>",
+  "ten_uut": "<Loại mẫu / instrument type, e.g. PG, PGPI, Pressure Gauge>",
+  "khach_hang": "<Khách hàng / Customer name>",
+  "nguoi_thuc_hien": "<Full name on Người thực hiện / Technician signature line>",
+  "ngay_hc": "<Ngày HC / Calibration date in DD/MM/YYYY format>",
+  "ket_qua": "<'OK' if Đạt is checked, else 'FAIL'>",
+  "tem_hc": "<Tem hiệu chuẩn / Calibration label number>",
+  "ngay_ke_tiep": "<Ngày tới hạn / Due date in DD/MM/YYYY format>",
+  "tb_chuan_1": "<Mã số TB from the Chuẩn được sử dụng / Reference standard table>",
+  "don_vi": "<unit of pressure, e.g. bar, MPa, kPa, psi>",
+  "range_min": <numeric minimum of calibration range, e.g. 0>,
+  "range_max": <numeric maximum of calibration range, e.g. 700>,
+  "points": [
+    {
+      "point_id": "D1",
+      "p_value": <numeric value of UUT/REF set point>,
+      "p_tang":  <numeric reading during increasing stroke>,
+      "p_giam":  <numeric reading during decreasing stroke>
+    }
+  ]
+}
+
+Rules:
+- Extract ALL calibration data points (D1 … Dn).
+- Use null for any field that cannot be determined.
+- All numeric fields must be numbers, not strings.
+- Return ONLY the JSON object, nothing else.
+"""
+
 
 
 def fetch_available_models(api_key: str) -> list[str]:
