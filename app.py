@@ -973,9 +973,14 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
         points          = extracted_data.get("points", [])
 
         # ── Sheet 1: one row per device ───────────────────────────────────
-        last_row_s1 = _get_last_data_row(ws1, header_offset=1)
-        next_row_s1 = max(2, last_row_s1 + 1)
+        header_end_s1, last_data_s1 = _get_last_data_row(ws1, header_offset=1)
+        if last_data_s1 > header_end_s1:
+            next_row_s1 = last_data_s1 + 1
+        else:
+            next_row_s1 = max(2, header_end_s1 + 1)
         _unmerge_row(ws1, next_row_s1)
+        for c in range(1, 26):
+            ws1.cell(row=next_row_s1, column=c).value = None
 
         if ws1.max_row >= 2:
             _copy_row_style(ws1, 2, next_row_s1)
@@ -989,13 +994,17 @@ def append_all_to_excel(excel_path: str | Path, data_list: list[dict]) -> bytes:
             ws1.cell(row=next_row_s1, column=col_idx, value=value)
 
         # ── Sheet 2: N point rows + 1 blank separator per device ─────────
-        last_row_s2 = _get_last_data_row(ws2, header_offset=6)
-        if last_row_s2 > 6:
-            last_row_s2 += 1  # 1 blank separator row
+        header_end_s2, last_data_s2 = _get_last_data_row(ws2, header_offset=6)
+        if last_data_s2 > header_end_s2:
+            start_row_s2 = last_data_s2 + 2
+        else:
+            start_row_s2 = header_end_s2 + 1
 
         for i, pt in enumerate(points):
-            dest_row = last_row_s2 + 1 + i
+            dest_row = start_row_s2 + i
             _unmerge_row(ws2, dest_row)
+            for c in range(1, 26):
+                ws2.cell(row=dest_row, column=c).value = None
 
             point_id = pt.get("point_id", f"D{i+1}")
             p_value  = _safe_float(pt.get("p_value"))
