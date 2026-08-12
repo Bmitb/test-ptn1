@@ -656,7 +656,7 @@ def extract_data_from_document(
         max_output_tokens=4096,
     )
 
-    # Candidate models to attempt if the primary one is 503 overloaded
+    # Candidate models to attempt if the primary one is rate limited / overloaded
     fallback_models = [model_name] + [
         m for m in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro", "gemini-flash-latest"]
         if m != model_name
@@ -664,7 +664,7 @@ def extract_data_from_document(
 
     last_err = None
     for attempt_model in fallback_models:
-        for attempt in range(3):  # 3 retries per model
+        for attempt in range(4):  # 4 retries per model
             try:
                 response = client.models.generate_content(
                     model=attempt_model,
@@ -676,18 +676,22 @@ def extract_data_from_document(
             except Exception as e:
                 err_str = str(e)
                 last_err = e
-                # Check for 503 (server overloaded) or 429 (rate limit)
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    wait_time = (attempt + 1) * 2
+                # Check for 429 (rate limit / resource exhausted) vs 503 (server overloaded)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    wait_time = (attempt + 1) * 5  # 5s, 10s, 15s, 20s backoff for 429 Rate Limits
+                    time.sleep(wait_time)
+                    continue
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    wait_time = (attempt + 1) * 3  # 3s, 6s, 9s backoff for 503
                     time.sleep(wait_time)
                     continue
                 else:
-                    # Other non-retryable errors -> break retry loop and try next fallback model
+                    # Non-retryable error on this model -> try next fallback model
                     break
 
     raise ValueError(
-        f"Gemini API error (đã tự động thử lại nhưng máy chủ Google đang quá tải 503): {last_err}\n"
-        f"💡 Gợi ý: Chọn model khác ở Sidebar (ví dụ: gemini-1.5-flash hoặc gemini-2.5-pro) hoặc thử lại sau 1-2 phút."
+        f"Gemini API error (đã tự động thử lại nhiều lần nhưng bị giới hạn tần suất 429/503): {last_err}\n"
+        f"💡 Gợi ý: Google API Key miễn phí bị giới hạn lượt gọi/phút. Vui lòng chờ 30s-1 phút rồi bấm Trích xuất lại."
     )
 
 
@@ -1557,6 +1561,9 @@ def main():
         _log_lines: list[str] = []
 
         for _ui, _unit in enumerate(_unit_plan):
+            if _ui > 0:
+                time.sleep(3)  # Pacing delay to respect Gemini API Rate Limits (RPM)
+
             _fname   = _unit["filename"]
             _pg_idx  = _unit["page_idx"]
             _tot_pg  = _unit["total_pages"]
